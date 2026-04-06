@@ -99,6 +99,7 @@ export default function NetworkGraph() {
   const [isSigningIn, setIsSigningIn] = useState(false);
   const [hasMounted, setHasMounted] = useState(false);
   const [includeFriendships, setIncludeFriendships] = useState(true);
+  const [includeExes, setIncludeExes] = useState(true);
   const [includeEnemies, setIncludeEnemies] = useState(true);
   const [includeLovers, setIncludeLovers] = useState(true);
   const [includeFamily, setIncludeFamily] = useState(true);
@@ -192,7 +193,7 @@ export default function NetworkGraph() {
       case "family":
         return includeFamily;
       case "exes":
-        return true;
+        return includeExes;
       default:
         return true;
     }
@@ -1432,6 +1433,16 @@ export default function NetworkGraph() {
           </label>
           <label className="flex items-center gap-2 text-sm text-slate-700">
             <input
+              id="include-exes"
+              type="checkbox"
+              checked={includeExes}
+              onChange={(event) => setIncludeExes(event.target.checked)}
+              className="h-4 w-4"
+            />
+            Include exes
+          </label>
+          <label className="flex items-center gap-2 text-sm text-slate-700">
+            <input
               id="include-lovers"
               type="checkbox"
               checked={includeLovers}
@@ -1648,47 +1659,49 @@ export default function NetworkGraph() {
           ) : null}
         </div>
 
-        <aside className="w-96 border-l border-slate-200 bg-white flex flex-col">
-          <div className="p-3 border-b border-slate-200">
-            <h2 className="font-semibold text-slate-800">Social Dynamics Agent</h2>
-            <p className="text-xs text-slate-500">Ask questions about group patterns from the graph.</p>
-            {agentError ? <p className="mt-1 text-xs text-red-600">{agentError}</p> : null}
-          </div>
+        {currentUserId ? (
+          <aside className="w-96 border-l border-slate-200 bg-white flex flex-col">
+            <div className="p-3 border-b border-slate-200">
+              <h2 className="font-semibold text-slate-800">Social Dynamics Agent</h2>
+              <p className="text-xs text-slate-500">Ask questions about group patterns from the graph.</p>
+              {agentError ? <p className="mt-1 text-xs text-red-600">{agentError}</p> : null}
+            </div>
 
-          <div className="flex-1 overflow-y-auto p-3 space-y-2">
-            {agentMessages.map((message, index) => (
-              <div
-                key={`${message.role}-${index}`}
-                className={
-                  message.role === "user"
-                    ? "ml-6 rounded bg-slate-800 text-white p-2 text-sm"
-                    : "mr-6 rounded bg-slate-100 text-slate-800 p-2 text-sm"
-                }
+            <div className="flex-1 overflow-y-auto p-3 space-y-2">
+              {agentMessages.map((message, index) => (
+                <div
+                  key={`${message.role}-${index}`}
+                  className={
+                    message.role === "user"
+                      ? "ml-6 rounded bg-slate-800 text-white p-2 text-sm"
+                      : "mr-6 rounded bg-slate-100 text-slate-800 p-2 text-sm"
+                  }
+                >
+                  {message.text}
+                </div>
+              ))}
+            </div>
+
+            <div className="p-3 border-t border-slate-200 space-y-2">
+              <textarea
+                value={agentQuestion}
+                onChange={(event) => setAgentQuestion(event.target.value)}
+                rows={3}
+                placeholder="Ask a social question..."
+                className="w-full border border-slate-300 rounded px-3 py-2 text-sm"
+              />
+              <button
+                onClick={() => {
+                  void handleAskAgent();
+                }}
+                disabled={isAgentLoading}
+                className="w-full px-4 py-2 bg-violet-600 text-white rounded hover:bg-violet-700"
               >
-                {message.text}
-              </div>
-            ))}
-          </div>
-
-          <div className="p-3 border-t border-slate-200 space-y-2">
-            <textarea
-              value={agentQuestion}
-              onChange={(event) => setAgentQuestion(event.target.value)}
-              rows={3}
-              placeholder="Ask a social question..."
-              className="w-full border border-slate-300 rounded px-3 py-2 text-sm"
-            />
-            <button
-              onClick={() => {
-                void handleAskAgent();
-              }}
-              disabled={isAgentLoading}
-              className="w-full px-4 py-2 bg-violet-600 text-white rounded hover:bg-violet-700"
-            >
-              {isAgentLoading ? "Thinking..." : "Ask Agent"}
-            </button>
-          </div>
-        </aside>
+                {isAgentLoading ? "Thinking..." : "Ask Agent"}
+              </button>
+            </div>
+          </aside>
+        ) : null}
       </div>
     </main>
   );
