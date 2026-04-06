@@ -29,6 +29,14 @@ type AgentMessage = {
   text: string;
 };
 
+type SignupRequest = {
+  id: string;
+  email: string;
+  firstName: string;
+  lastName: string;
+  status: string;
+};
+
 type NodeLayoutSnapshot = {
   x?: number;
   y?: number;
@@ -117,6 +125,9 @@ export default function NetworkGraph() {
   const [requestFirstName, setRequestFirstName] = useState("");
   const [requestLastName, setRequestLastName] = useState("");
   const [requestEmail, setRequestEmail] = useState("");
+  const [pendingRequests, setPendingRequests] = useState<SignupRequest[]>([]);
+  const [isLoadingPendingRequests, setIsLoadingPendingRequests] = useState(false);
+  const [isApprovingRequestId, setIsApprovingRequestId] = useState<string | null>(null);
   const [personAQuery, setPersonAQuery] = useState("");
   const [personBQuery, setPersonBQuery] = useState("");
   const [connectionType, setConnectionType] = useState<RelationshipType>("friends");
@@ -323,7 +334,92 @@ export default function NetworkGraph() {
     setSignInPassword("");
     setAuthMessage(null);
     await fetchGraphData();
+    await loadPendingRequests();
     setIsSigningIn(false);
+  };
+
+  const loadPendingRequests = useCallback(async () => {
+    if (!currentUserId) {
+      setPendingRequests([]);
+      return;
+    }
+
+    setIsLoadingPendingRequests(true);
+
+    const requestResult = await supabase
+      .from("signup_requests")
+      .select("*")
+      .order("id", { ascending: true });
+
+    if (requestResult.error) {
+      if (hasMissingTableError(requestResult.error.message, "signup_requests")) {
+        setPendingRequests([]);
+        setIsLoadingPendingRequests(false);
+        return;
+      }
+
+      setError(requestResult.error.message);
+      setPendingRequests([]);
+      setIsLoadingPendingRequests(false);
+      return;
+    }
+
+    const normalized = ((requestResult.data ?? []) as Array<Record<string, unknown>>)
+      .map((row) => ({
+        id: String(row.id ?? ""),
+        email: String(row.email ?? ""),
+        firstName: String(row.first_name ?? ""),
+        lastName: String(row.last_name ?? ""),
+        status: String(row.status ?? "pending").toLowerCase(),
+      }))
+      .filter((row) => row.id && row.email)
+      .filter((row) => row.status === "pending");
+
+    setPendingRequests(normalized);
+    setIsLoadingPendingRequests(false);
+  }, [currentUserId]);
+
+  const handleApproveRequest = async (requestId: string, email: string) => {
+    if (!currentUserId) {
+      setError("You must be signed in before approving requests.");
+      return;
+    }
+
+    setIsApprovingRequestId(requestId);
+    setError(null);
+    setAuthMessage(null);
+
+    const {
+      data: { session },
+      error: sessionError,
+    } = await supabase.auth.getSession();
+
+    if (sessionError || !session?.access_token) {
+      setError(sessionError?.message ?? "No active session token found.");
+      setIsApprovingRequestId(null);
+      return;
+    }
+
+    const response = await fetch("/api/admin/approve-signup", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${session.access_token}`,
+      },
+      body: JSON.stringify({ requestId, email }),
+    });
+
+    if (!response.ok) {
+      const errorBody = (await response.json().catch(() => null)) as { error?: string } | null;
+      setError(errorBody?.error ?? "Unable to approve this request.");
+      setIsApprovingRequestId(null);
+      return;
+    }
+
+    const result = (await response.json()) as { message?: string };
+    setAuthMessage(result.message ?? `Invite email sent to ${email}.`);
+    await loadPendingRequests();
+    setIsApprovingRequestId(null);
   };
 
   const handleCreateAccountRequest = async () => {
@@ -420,6 +516,7 @@ export default function NetworkGraph() {
     setRequestFirstName("");
     setRequestLastName("");
     setRequestEmail("");
+    setPendingRequests([]);
     setPersonAQuery("");
     setPersonBQuery("");
     setConnectionType("friends");
@@ -1298,6 +1395,15 @@ export default function NetworkGraph() {
     };
   }, [fetchGraphData, getCurrentUserId]);
 
+  useEffect(() => {
+    if (!currentUserId) {
+      setPendingRequests([]);
+      return;
+    }
+
+    void loadPendingRequests();
+  }, [currentUserId, loadPendingRequests]);
+
   if (!hasMounted) {
     return (
       <main className="flex h-screen w-screen items-center justify-center bg-slate-50 text-slate-500">
@@ -1507,6 +1613,57 @@ export default function NetworkGraph() {
             >
               {isSigningIn ? "Submitting..." : "Submit Request"}
             </button>
+          </div>
+        </section>
+      ) : null}
+
+      {currentUserId ? (
+        <section className="p-4 bg-white border-t border-slate-200">
+          <div className="flex items-center justify-between gap-3">
+            <h3 className="text-sm font-semibold text-slate-800">Pending Account Requests</h3>
+            <button
+              onClick={() => {
+                void loadPendingRequests();
+              }}
+              disabled={isLoadingPendingRequests || isSigningIn}
+              className="px-3 py-1.5 bg-slate-100 text-slate-700 rounded hover:bg-slate-200 disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              {isLoadingPendingRequests ? "Loading..." : "Refresh"}
+            </button>
+          </div>
+
+          <div className="mt-3 space-y-2">
+            {pendingRequests.length === 0 ? (
+              <p className="text-sm text-slate-500">No pending requests.</p>
+            ) : (
+              pendingRequests.map((request) => {
+                const displayName = [request.firstName, request.lastName].filter(Boolean).join(" ");
+                const isApproving = isApprovingRequestId === request.id;
+
+                return (
+                  <div
+                    key={request.id}
+                    className="flex flex-wrap items-center justify-between gap-3 rounded border border-slate-200 bg-slate-50 px-3 py-2"
+                  >
+                    <div>
+                      <p className="text-sm font-medium text-slate-800">
+                        {displayName || "No name provided"}
+                      </p>
+                      <p className="text-xs text-slate-600">{request.email}</p>
+                    </div>
+                    <button
+                      onClick={() => {
+                        void handleApproveRequest(request.id, request.email);
+                      }}
+                      disabled={isApproving}
+                      className="px-3 py-1.5 bg-emerald-600 text-white rounded hover:bg-emerald-700 disabled:opacity-60 disabled:cursor-not-allowed"
+                    >
+                      {isApproving ? "Approving..." : "Approve + Send Invite"}
+                    </button>
+                  </div>
+                );
+              })
+            )}
           </div>
         </section>
       ) : null}

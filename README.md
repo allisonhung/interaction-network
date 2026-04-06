@@ -35,6 +35,8 @@ Required variables:
 - `NEXT_PUBLIC_SUPABASE_URL`
 - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
 - `GEMINI_API_KEY`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `APPROVER_EMAILS` (comma-separated admin emails that can approve requests)
 
 Do not commit `.env.local`.
 
