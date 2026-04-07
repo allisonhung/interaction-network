@@ -96,6 +96,15 @@ const ForceGraph2D = dynamic(() => import("react-force-graph-2d"), {
   ssr: false,
 });
 
+const EXAMPLE_PROMPTS = [
+  "Who are the most connected people in this network?",
+  "Identify any love triangles or complex relationship webs.",
+  "Map out distinct friend groups and clusters.",
+  "Who bridges different groups or communities?",
+  "Find relationships that have conflicting dynamics (e.g., friend with an enemy).",
+  "Suggest an event guest list that would minimize relationship tension.",
+];
+
 export default function NetworkGraph() {
   const graphRef = useRef<
     ForceGraphMethods<NodeObject, LinkObject> | undefined
@@ -1900,6 +1909,64 @@ export default function NetworkGraph() {
               <p className="text-xs text-slate-500">Ask questions about group patterns from the graph.</p>
               {agentError ? <p className="mt-1 text-xs text-red-600">{agentError}</p> : null}
             </div>
+
+            {agentMessages.length <= 1 ? (
+              <div className="p-3 border-b border-slate-200 space-y-2">
+                <p className="text-xs font-semibold text-slate-600 uppercase">Example Prompts</p>
+                <div className="space-y-1.5">
+                  {EXAMPLE_PROMPTS.map((prompt, index) => (
+                    <button
+                      key={index}
+                      onClick={() => {
+                        setAgentQuestion(prompt);
+                        // Schedule the send to happen after state update
+                        setTimeout(() => {
+                          setAgentMessages((current) => [
+                            ...current,
+                            { role: "user", text: prompt },
+                          ]);
+                          void (async () => {
+                            setIsAgentLoading(true);
+                            setAgentError(null);
+
+                            const visible = getVisibleGraphData();
+                            const summary = `Nodes: ${visible.nodes.length}, Links: ${visible.links.length}`;
+
+                            try {
+                              const response = await fetch("/api/social-agent", {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({ question: prompt, graphSummary: summary }),
+                              });
+
+                              if (!response.ok) {
+                                const error = await response.text();
+                                throw new Error(error);
+                              }
+
+                              const { answer } = (await response.json()) as { answer?: string };
+                              setAgentMessages((current) => [
+                                ...current,
+                                { role: "assistant", text: answer ?? "No response." },
+                              ]);
+                            } catch (err) {
+                              const msg = err instanceof Error ? err.message : "Error querying agent.";
+                              setAgentError(msg);
+                            } finally {
+                              setIsAgentLoading(false);
+                              setAgentQuestion("");
+                            }
+                          })();
+                        }, 0);
+                      }}
+                      className="w-full text-left text-xs p-2 rounded border border-slate-200 hover:bg-violet-50 hover:border-violet-300 text-slate-700 transition"
+                    >
+                      {prompt}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : null}
 
             <div className="flex-1 overflow-y-auto p-3 space-y-2">
               {agentMessages.map((message, index) => (
