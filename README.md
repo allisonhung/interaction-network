@@ -1,56 +1,98 @@
-# interaction-network
+# Interaction Network
 
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+Interaction Network is a Next.js app for mapping social relationships between people, exploring graph structure visually, and asking an AI assistant questions about the network.
 
-## Getting Started
+## What it does
 
-First, run the development server:
+- Visualizes people and relationship edges in an interactive force graph.
+- Supports relationship types: `friends`, `coworkers`, `exes`, `lovers`, `enemies`, `family`.
+- Colors relationship edges by type (`coworkers` is gray).
+- Lets signed-in users add/edit/delete nodes and connections.
+- Includes relationship visibility toggles (include/exclude by edge type).
+- Includes a Disperse layout mode with automatic zoom-to-fit.
+- Provides a Gemini-powered “Social Dynamics Agent” sidebar with example prompts.
+- Supports sign-in plus account request submission and admin approval/deny workflow.
+
+## Tech stack
+
+- Next.js 16 (App Router)
+- React 19
+- Tailwind CSS 4
+- Supabase (Auth + Database)
+- react-force-graph-2d
+- Gemini API
+
+## Local setup
+
+1. Install dependencies:
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm install
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
-
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
-
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
-
-## Environment Variables
-
-Copy the example file and fill in your own values:
+2. Create local env file:
 
 ```bash
 cp .env.example .env.local
 ```
 
-Required variables:
+3. Fill `.env.local` with real values.
+
+4. Run dev server:
+
+```bash
+npm run dev
+```
+
+5. Open http://localhost:3000
+
+## Environment variables
+
+Required:
 
 - `NEXT_PUBLIC_SUPABASE_URL`
 - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
-- `GEMINI_API_KEY`
 - `SUPABASE_SERVICE_ROLE_KEY`
-- `APPROVER_EMAILS` (comma-separated admin emails that can approve requests)
+- `APPROVER_EMAILS`
+- `GEMINI_API_KEY`
 
-Do not commit `.env.local`.
+Recommended:
 
-## Learn More
+- `SUPABASE_INVITE_REDIRECT_URL` (for invite links, e.g. `https://your-domain.com/auth/callback`)
 
-To learn more about Next.js, take a look at the following resources:
+Never commit `.env.local`.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Supabase requirements
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+At minimum, create/maintain these tables:
 
-## Deploy on Vercel
+- `nodes` (person nodes)
+- relationship table: app supports `links`, `connections`, or `edges`
+- `signup_requests` (for account approval flow)
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Notes:
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- The app includes fallbacks for some schema variations (`type` vs `relationship_type`, optional color/status metadata).
+- Admin approval sends Supabase invite emails via service role key.
+
+## Authentication and invite flow
+
+- Users can request accounts from the UI.
+- Approved requests send invite emails.
+- Invite links redirect to the app callback page at `/auth/callback`.
+- Configure Supabase Auth URL settings to allow your production and local callback URLs.
+
+## Scripts
+
+- `npm run dev` — start local dev server
+- `npm run build` — production build
+- `npm run start` — run production server
+- `npm run lint` — lint code
+
+## Deployment
+
+Deploy on Vercel with GitHub integration.
+
+- Pushes to your connected branch trigger automatic redeploys.
+- Add all required environment variables in Vercel Project Settings.
+
