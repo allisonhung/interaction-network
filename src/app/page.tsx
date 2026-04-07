@@ -1174,6 +1174,11 @@ export default function NetworkGraph() {
       setIsDispersed(false);
       setLayoutSnapshot(null);
       graphRef.current?.d3ReheatSimulation?.();
+
+      // Zoom to fit all nodes after restoring layout
+      setTimeout(() => {
+        graphRef.current?.zoomToFit?.();
+      }, 100);
       return;
     }
 
@@ -1407,6 +1412,11 @@ export default function NetworkGraph() {
     setIsDispersed(true);
 
     graphRef.current?.d3ReheatSimulation?.();
+
+    // Zoom to fit all nodes after graph updates
+    setTimeout(() => {
+      graphRef.current?.zoomToFit?.();
+    }, 100);
   };
 
   useEffect(() => {
