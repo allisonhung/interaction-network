@@ -2449,8 +2449,8 @@ export default function NetworkGraph() {
           <aside className="w-96 border-l border-slate-200 bg-white flex flex-col">
             <div className="flex items-start justify-between gap-2 border-b border-slate-200 p-3">
               <div>
-                <h2 className="font-semibold text-slate-800">Social Dynamics Agent</h2>
-                <p className="text-xs text-slate-500">Ask questions or plan events from the graph.</p>
+                <h2 className="font-semibold text-slate-800">Planning Hub</h2>
+                <p className="text-xs text-slate-500">Ask questions with Gemini or plan events from the graph.</p>
               </div>
               <button
                 onClick={() => setIsSidebarMinimized((current) => !current)}
