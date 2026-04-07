@@ -117,6 +117,21 @@ const hasMissingTableError = (message: string | undefined, table: string) => {
 
 const normalizePersonName = (value: string) => value.trim().replace(/\s+/g, " ").toLowerCase();
 
+const getLinkEndpointId = (endpoint: unknown) => {
+  if (typeof endpoint === "string" || typeof endpoint === "number") {
+    return String(endpoint);
+  }
+
+  if (endpoint && typeof endpoint === "object" && "id" in endpoint) {
+    const endpointId = (endpoint as { id?: unknown }).id;
+    if (typeof endpointId === "string" || typeof endpointId === "number") {
+      return String(endpointId);
+    }
+  }
+
+  return null;
+};
+
 // Next.js requires graph libraries to be loaded dynamically on the client side
 const ForceGraph2D = dynamic(() => import("react-force-graph-2d"), {
   ssr: false,
@@ -316,8 +331,13 @@ export default function NetworkGraph() {
     }
 
     const links = visibleGraphData.links.filter((link) => {
-      const source = String(link.source);
-      const target = String(link.target);
+      const source = getLinkEndpointId((link as { source?: unknown }).source);
+      const target = getLinkEndpointId((link as { target?: unknown }).target);
+
+      if (!source || !target) {
+        return false;
+      }
+
       return nodeIds.has(source) && nodeIds.has(target);
     });
 
