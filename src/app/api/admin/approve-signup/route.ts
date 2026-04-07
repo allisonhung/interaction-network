@@ -25,6 +25,20 @@ const getAllowedApproverEmails = () => {
     .filter(Boolean);
 };
 
+const ensureInviteCallbackPath = (rawUrl: string) => {
+  try {
+    const parsed = new URL(rawUrl);
+    if (parsed.pathname === "/" || parsed.pathname === "") {
+      parsed.pathname = "/auth/callback";
+      return parsed.toString().replace(/\/$/, "");
+    }
+
+    return parsed.toString().replace(/\/$/, "");
+  } catch {
+    return rawUrl.replace(/\/$/, "");
+  }
+};
+
 const getInviteRedirectUrl = (request: Request) => {
   const configuredRedirect =
     process.env.SUPABASE_INVITE_REDIRECT_URL ??
@@ -32,18 +46,18 @@ const getInviteRedirectUrl = (request: Request) => {
     process.env.NEXT_PUBLIC_SITE_URL;
 
   if (configuredRedirect?.trim()) {
-    return configuredRedirect.trim().replace(/\/$/, "");
+    return ensureInviteCallbackPath(configuredRedirect.trim());
   }
 
   const vercelUrl = process.env.VERCEL_PROJECT_PRODUCTION_URL ?? process.env.VERCEL_URL;
   if (vercelUrl?.trim()) {
     const host = vercelUrl.trim().replace(/^https?:\/\//, "").replace(/\/$/, "");
-    return `https://${host}`;
+    return ensureInviteCallbackPath(`https://${host}`);
   }
 
   const origin = request.headers.get("origin")?.trim();
   if (origin && !origin.includes("localhost")) {
-    return origin.replace(/\/$/, "");
+    return ensureInviteCallbackPath(origin);
   }
 
   return undefined;

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import dynamic from "next/dynamic";
 import { supabase } from "@/lib/supabase/client";
 import type { ForceGraphMethods, LinkObject, NodeObject } from "react-force-graph-2d";
@@ -221,12 +221,13 @@ export default function NetworkGraph() {
     }
   };
 
-  const getVisibleGraphData = () => {
-    return {
+  const visibleGraphData = useMemo(
+    () => ({
       nodes: graphData.nodes,
       links: graphData.links.filter((link) => isRelationshipVisible(String(link.type))),
-    };
-  };
+    }),
+    [graphData.nodes, graphData.links, includeFriendships, includeEnemies, includeExes, includeLovers, includeFamily]
+  );
 
   const fetchLinksFromAvailableTable = useCallback(async () => {
     for (const table of RELATION_TABLE_CANDIDATES) {
@@ -281,6 +282,25 @@ export default function NetworkGraph() {
 
     const name = window.prompt("Enter the person's name:")?.trim();
     if (!name) {
+      return;
+    }
+
+    const normalizeName = (value: string) => value.trim().replace(/\s+/g, " ").toLowerCase();
+    const existingNames = new Set(graphData.nodes.map((node) => normalizeName(node.name)));
+
+    if (existingNames.has(normalizeName(name))) {
+      const romanNumerals = ["II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X"];
+      let suggestedName = `${name} II`;
+
+      for (const numeral of romanNumerals) {
+        const candidate = `${name} ${numeral}`;
+        if (!existingNames.has(normalizeName(candidate))) {
+          suggestedName = candidate;
+          break;
+        }
+      }
+
+      setError(`A person named "${name}" already exists. Try "${suggestedName}".`);
       return;
     }
 
@@ -1208,7 +1228,7 @@ export default function NetworkGraph() {
       };
     }
 
-    const visible = getVisibleGraphData();
+    const visible = visibleGraphData;
     const nodeIds = visible.nodes.map((node) => node.id);
 
     if (nodeIds.length === 0) {
@@ -1857,7 +1877,7 @@ export default function NetworkGraph() {
         <div ref={graphAreaRef} className="flex-1 overflow-hidden relative">
           <ForceGraph2D
             ref={graphRef}
-            graphData={getVisibleGraphData()}
+            graphData={visibleGraphData}
             linkLabel="type"
             onBackgroundClick={() => setContextMenu(null)}
             onNodeRightClick={(node, event) => {
