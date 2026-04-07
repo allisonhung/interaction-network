@@ -50,6 +50,15 @@ type PlannedEvent = {
   createdAt: string;
 };
 
+type PlannedEventRecord = {
+  id?: unknown;
+  user_id?: unknown;
+  name?: unknown;
+  attendees?: unknown;
+  created_at?: unknown;
+  createdAt?: unknown;
+};
+
 type NodeLayoutSnapshot = {
   x?: number;
   y?: number;
@@ -86,6 +95,7 @@ type InsertError = {
 } | null;
 
 const RELATION_TABLE_CANDIDATES = ["links", "connections", "edges"] as const;
+const EVENT_TABLE_CANDIDATES = ["planned_events", "events"] as const;
 const RELATIONSHIP_OPTIONS = ["friends", "coworkers", "exes", "lovers", "enemies", "family"] as const;
 type RelationshipType = (typeof RELATIONSHIP_OPTIONS)[number];
 const RELATIONSHIP_COLORS: Record<RelationshipType, string> = {
@@ -160,6 +170,7 @@ export default function NetworkGraph() {
   const [isSidebarMinimized, setIsSidebarMinimized] = useState(false);
   const [plannedEvents, setPlannedEvents] = useState<PlannedEvent[]>([]);
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
+  const [isLoadingEvents, setIsLoadingEvents] = useState(false);
   const [eventDraftName, setEventDraftName] = useState("");
   const [eventAttendeeQuery, setEventAttendeeQuery] = useState("");
   const [eventDraftAttendees, setEventDraftAttendees] = useState<EventAttendee[]>([]);
@@ -304,16 +315,188 @@ export default function NetworkGraph() {
       }
     }
 
-    const links = graphData.links.filter((link) => {
+    const links = visibleGraphData.links.filter((link) => {
       const source = String(link.source);
       const target = String(link.target);
       return nodeIds.has(source) && nodeIds.has(target);
     });
 
     return { nodes, links };
-  }, [graphData.links, graphData.nodes, selectedEvent]);
+  }, [graphData.nodes, selectedEvent, visibleGraphData.links]);
 
   const activeGraphData = selectedEvent ? eventGraphData ?? visibleGraphData : visibleGraphData;
+
+  const getEventStorageKey = useCallback(
+    (userId: string) => `interaction-network-events:${userId}`,
+    []
+  );
+
+  const normalizeEventAttendees = useCallback(
+    (attendees: unknown, eventId: string): EventAttendee[] => {
+      if (!Array.isArray(attendees)) {
+        return [];
+      }
+
+      return attendees
+        .map((attendee, index) => {
+          if (!attendee || typeof attendee !== "object") {
+            return null;
+          }
+
+          const rawName = (attendee as { name?: unknown }).name;
+          const name = typeof rawName === "string" ? rawName.trim() : "";
+          if (!name) {
+            return null;
+          }
+
+          const rawExistingNodeId = (attendee as { existingNodeId?: unknown }).existingNodeId;
+          const rawId = (attendee as { id?: unknown }).id;
+
+          return {
+            id:
+              typeof rawId === "string" && rawId.trim()
+                ? rawId.trim()
+                : `${eventId}:attendee:${index}`,
+            name,
+            existingNodeId: typeof rawExistingNodeId === "string" ? rawExistingNodeId : undefined,
+          };
+        })
+        .filter(Boolean) as EventAttendee[];
+    },
+    []
+  );
+
+  const normalizePlannedEventRecord = useCallback(
+    (row: PlannedEventRecord, index: number): PlannedEvent | null => {
+      const id = typeof row.id === "string" && row.id.trim() ? row.id.trim() : `event-${index}`;
+      const name = typeof row.name === "string" ? row.name.trim() : "";
+
+      if (!name) {
+        return null;
+      }
+
+      const createdAtSource =
+        typeof row.created_at === "string"
+          ? row.created_at
+          : typeof row.createdAt === "string"
+            ? row.createdAt
+            : new Date().toISOString();
+
+      return {
+        id,
+        name,
+        attendees: normalizeEventAttendees(row.attendees, id),
+        createdAt: createdAtSource,
+      };
+    },
+    [normalizeEventAttendees]
+  );
+
+  const loadPlannedEvents = useCallback(async () => {
+    if (!currentUserId) {
+      setPlannedEvents([]);
+      return;
+    }
+
+    setIsLoadingEvents(true);
+    setEventError(null);
+
+    for (const table of EVENT_TABLE_CANDIDATES) {
+      const scopedResult = await supabase
+        .from(table)
+        .select("id,name,attendees,created_at,user_id")
+        .eq("user_id", currentUserId)
+        .order("created_at", { ascending: false });
+
+      if (scopedResult.error) {
+        if (hasMissingTableError(scopedResult.error.message, table)) {
+          continue;
+        }
+
+        setEventError(scopedResult.error.message);
+        setIsLoadingEvents(false);
+        return;
+      }
+
+      const normalized = ((scopedResult.data ?? []) as PlannedEventRecord[])
+        .map((row, index) => normalizePlannedEventRecord(row, index))
+        .filter(Boolean) as PlannedEvent[];
+
+      setPlannedEvents(normalized);
+      setIsLoadingEvents(false);
+      return;
+    }
+
+    const localKey = getEventStorageKey(currentUserId);
+    const stored = window.localStorage.getItem(localKey);
+
+    if (!stored) {
+      setPlannedEvents([]);
+      setEventError(
+        "Create a planned_events table in Supabase to store account-specific events across devices."
+      );
+      setIsLoadingEvents(false);
+      return;
+    }
+
+    try {
+      const parsed = JSON.parse(stored) as unknown;
+      const normalized = Array.isArray(parsed)
+        ? parsed
+            .map((row, index) => {
+              if (!row || typeof row !== "object") {
+                return null;
+              }
+
+              const id =
+                typeof (row as { id?: unknown }).id === "string" &&
+                (row as { id?: string }).id?.trim()
+                  ? (row as { id: string }).id.trim()
+                  : `event-${index}`;
+              const name =
+                typeof (row as { name?: unknown }).name === "string"
+                  ? (row as { name: string }).name.trim()
+                  : "";
+
+              if (!name) {
+                return null;
+              }
+
+              return {
+                id,
+                name,
+                attendees: normalizeEventAttendees((row as { attendees?: unknown }).attendees, id),
+                createdAt:
+                  typeof (row as { createdAt?: unknown }).createdAt === "string"
+                    ? (row as { createdAt: string }).createdAt
+                    : new Date().toISOString(),
+              };
+            })
+            .filter(Boolean)
+        : [];
+
+      setPlannedEvents(normalized as PlannedEvent[]);
+      setEventError(
+        "Create a planned_events table in Supabase to store account-specific events across devices."
+      );
+    } catch {
+      setPlannedEvents([]);
+      setEventError("Unable to read stored events from this browser.");
+    } finally {
+      setIsLoadingEvents(false);
+    }
+  }, [currentUserId, getEventStorageKey, normalizeEventAttendees, normalizePlannedEventRecord]);
+
+  const savePlannedEventsToLocalStorage = useCallback(
+    (events: PlannedEvent[]) => {
+      if (!currentUserId) {
+        return;
+      }
+
+      window.localStorage.setItem(getEventStorageKey(currentUserId), JSON.stringify(events));
+    },
+    [currentUserId, getEventStorageKey]
+  );
 
   const fetchLinksFromAvailableTable = useCallback(async () => {
     for (const table of RELATION_TABLE_CANDIDATES) {
@@ -462,7 +645,7 @@ export default function NetworkGraph() {
     setEventDraftAttendees((current) => current.filter((attendee) => attendee.id !== attendeeId));
   };
 
-  const handleCreateEvent = () => {
+  const handleCreateEvent = async () => {
     const eventName = eventDraftName.trim();
 
     if (!eventName) {
@@ -482,13 +665,81 @@ export default function NetworkGraph() {
       createdAt: new Date().toISOString(),
     };
 
-    setPlannedEvents((current) => [event, ...current]);
+    if (!currentUserId) {
+      setEventError("You must be signed in before creating events.");
+      return;
+    }
+
+    setIsLoadingEvents(true);
+    setEventError(null);
+
+    let savedRemotely = false;
+
+    for (const table of EVENT_TABLE_CANDIDATES) {
+      const insertResult = await supabase.from(table).insert({
+        id: event.id,
+        user_id: currentUserId,
+        name: event.name,
+        attendees: event.attendees,
+        created_at: event.createdAt,
+      });
+
+      if (insertResult.error) {
+        if (hasMissingTableError(insertResult.error.message, table)) {
+          continue;
+        }
+
+        if (hasMissingColumnError(insertResult.error.message, "attendees")) {
+          const retryResult = await supabase.from(table).insert({
+            id: event.id,
+            user_id: currentUserId,
+            name: event.name,
+            created_at: event.createdAt,
+          });
+
+          if (retryResult.error) {
+            setEventError(retryResult.error.message);
+            setIsLoadingEvents(false);
+            return;
+          }
+
+          savedRemotely = true;
+          break;
+        }
+
+        setEventError(insertResult.error.message);
+        setIsLoadingEvents(false);
+        return;
+      }
+
+      savedRemotely = true;
+      break;
+    }
+
+    if (!savedRemotely) {
+      const nextEvents = [event, ...plannedEvents];
+      savePlannedEventsToLocalStorage(nextEvents);
+      setPlannedEvents(nextEvents);
+      setSelectedEventId(event.id);
+      setSidebarTab("events");
+      setEventDraftName("");
+      setEventAttendeeQuery("");
+      setEventDraftAttendees([]);
+      setEventError(
+        "Create a planned_events table in Supabase to store account-specific events across devices."
+      );
+      setIsLoadingEvents(false);
+      return;
+    }
+
+    await loadPlannedEvents();
     setSelectedEventId(event.id);
     setSidebarTab("events");
     setEventDraftName("");
     setEventAttendeeQuery("");
     setEventDraftAttendees([]);
     setEventError(null);
+    setIsLoadingEvents(false);
   };
 
   const handleSelectEvent = (eventId: string) => {
@@ -1661,11 +1912,21 @@ export default function NetworkGraph() {
   useEffect(() => {
     if (!currentUserId) {
       setPendingRequests([]);
+      setPlannedEvents([]);
       return;
     }
 
     void loadPendingRequests();
   }, [currentUserId, loadPendingRequests]);
+
+  useEffect(() => {
+    if (!currentUserId) {
+      setPlannedEvents([]);
+      return;
+    }
+
+    void loadPlannedEvents();
+  }, [currentUserId, loadPlannedEvents]);
 
   useEffect(() => {
     if (!currentUserId) {
@@ -1687,6 +1948,7 @@ export default function NetworkGraph() {
     }
 
     const timeoutId = window.setTimeout(() => {
+      graphRef.current?.d3ReheatSimulation?.();
       graphRef.current?.zoomToFit?.(600, 80);
     }, 120);
 
@@ -2348,9 +2610,10 @@ export default function NetworkGraph() {
 
                       <button
                         onClick={handleCreateEvent}
+                        disabled={isLoadingEvents}
                         className="w-full rounded bg-violet-600 px-4 py-2 text-sm text-white hover:bg-violet-700"
                       >
-                        Create Event
+                        {isLoadingEvents ? "Saving..." : "Create Event"}
                       </button>
                     </div>
 
@@ -2367,7 +2630,9 @@ export default function NetworkGraph() {
                         ) : null}
                       </div>
 
-                      {plannedEvents.length === 0 ? (
+                      {isLoadingEvents ? (
+                        <p className="text-sm text-slate-500">Loading your events...</p>
+                      ) : plannedEvents.length === 0 ? (
                         <p className="text-sm text-slate-500">No events created yet.</p>
                       ) : (
                         <div className="space-y-2">

@@ -12,6 +12,7 @@ Interaction Network is a Next.js app for mapping social relationships between pe
 - Includes a Disperse layout mode with automatic zoom-to-fit.
 - Provides a Gemini-powered “Social Dynamics Agent” sidebar with example prompts.
 - Supports sign-in plus account request submission and admin approval/deny workflow.
+- Includes an Events planner sidebar tab for creating events, adding attendees, and viewing attendee-only subgraphs.
 
 ## Tech stack
 
@@ -69,11 +70,14 @@ At minimum, create/maintain these tables:
 - `nodes` (person nodes)
 - relationship table: app supports `links`, `connections`, or `edges`
 - `signup_requests` (for account approval flow)
+- `planned_events` or `events` (for per-account event planning)
 
 Notes:
 
 - The app includes fallbacks for some schema variations (`type` vs `relationship_type`, optional color/status metadata).
 - Admin approval sends Supabase invite emails via service role key.
+- Event rows should include `user_id`, `name`, `attendees` (JSON), and `created_at`.
+- Use row-level security so users can only read/write events where `user_id = auth.uid()`.
 
 ## Authentication and invite flow
 
