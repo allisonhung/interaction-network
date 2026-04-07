@@ -1,6 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
+const getAllowedApproverEmails = () => {
+  const rawApprovers =
+    process.env.APPROVER_EMAILS ??
+    process.env.APPROVER_EMAIL ??
+    process.env.NEXT_PUBLIC_APPROVER_EMAILS ??
+    process.env.NEXT_PUBLIC_APPROVER_EMAIL ??
+    "";
+
+  return rawApprovers
+    .split(/[\n,;]+/)
+    .map((value) => value.replace(/^['\"]|['\"]$/g, ""))
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean);
+};
+
 export async function POST(request: NextRequest) {
   try {
     const authHeader = request.headers.get("Authorization");
@@ -42,10 +57,17 @@ export async function POST(request: NextRequest) {
     }
 
     // Check if user is in APPROVER_EMAILS
-    const approverEmails = (process.env.APPROVER_EMAILS ?? "")
-      .split(",")
-      .map((email) => email.trim().toLowerCase())
-      .filter(Boolean);
+    const approverEmails = getAllowedApproverEmails();
+
+    if (approverEmails.length === 0) {
+      return NextResponse.json(
+        {
+          error:
+            "APPROVER_EMAILS is not configured. Set APPROVER_EMAILS (or APPROVER_EMAIL) to one or more emails.",
+        },
+        { status: 500 }
+      );
+    }
 
     if (!approverEmails.includes(user.email.toLowerCase())) {
       return NextResponse.json(

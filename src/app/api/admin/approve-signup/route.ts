@@ -11,8 +11,16 @@ const hasMissingColumnError = (message: string | undefined, column: string) => {
 };
 
 const getAllowedApproverEmails = () => {
-  return (process.env.APPROVER_EMAILS ?? "")
-    .split(",")
+  const rawApprovers =
+    process.env.APPROVER_EMAILS ??
+    process.env.APPROVER_EMAIL ??
+    process.env.NEXT_PUBLIC_APPROVER_EMAILS ??
+    process.env.NEXT_PUBLIC_APPROVER_EMAIL ??
+    "";
+
+  return rawApprovers
+    .split(/[\n,;]+/)
+    .map((value) => value.replace(/^['\"]|['\"]$/g, ""))
     .map((value) => value.trim().toLowerCase())
     .filter(Boolean);
 };
@@ -35,7 +43,10 @@ export async function POST(request: Request) {
   const allowedApprovers = getAllowedApproverEmails();
   if (allowedApprovers.length === 0) {
     return NextResponse.json(
-      { error: "APPROVER_EMAILS is not configured." },
+      {
+        error:
+          "APPROVER_EMAILS is not configured. Set APPROVER_EMAILS (or APPROVER_EMAIL) to one or more emails.",
+      },
       { status: 500 }
     );
   }

@@ -1468,6 +1468,20 @@ export default function NetworkGraph() {
     void loadPendingRequests();
   }, [currentUserId, loadPendingRequests]);
 
+  useEffect(() => {
+    if (!currentUserId) {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      void loadPendingRequests();
+    }, 5000);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [currentUserId, loadPendingRequests]);
+
   if (!hasMounted) {
     return (
       <main className="flex h-screen w-screen items-center justify-center bg-slate-50 text-slate-500">
