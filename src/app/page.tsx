@@ -37,6 +37,19 @@ type SignupRequest = {
   status: string;
 };
 
+type EventAttendee = {
+  id: string;
+  name: string;
+  existingNodeId?: string;
+};
+
+type PlannedEvent = {
+  id: string;
+  name: string;
+  attendees: EventAttendee[];
+  createdAt: string;
+};
+
 type NodeLayoutSnapshot = {
   x?: number;
   y?: number;
@@ -92,6 +105,8 @@ const hasMissingTableError = (message: string | undefined, table: string) => {
   return (message ?? "").includes(`Could not find the table 'public.${table}'`);
 };
 
+const normalizePersonName = (value: string) => value.trim().replace(/\s+/g, " ").toLowerCase();
+
 // Next.js requires graph libraries to be loaded dynamically on the client side
 const ForceGraph2D = dynamic(() => import("react-force-graph-2d"), {
   ssr: false,
@@ -141,6 +156,14 @@ export default function NetworkGraph() {
   const [isApprovingRequestId, setIsApprovingRequestId] = useState<string | null>(null);
   const [isDenyingRequestId, setIsDenyingRequestId] = useState<string | null>(null);
   const [isApprovalsMinimized, setIsApprovalsMinimized] = useState(false);
+  const [sidebarTab, setSidebarTab] = useState<"agent" | "events">("agent");
+  const [isSidebarMinimized, setIsSidebarMinimized] = useState(false);
+  const [plannedEvents, setPlannedEvents] = useState<PlannedEvent[]>([]);
+  const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
+  const [eventDraftName, setEventDraftName] = useState("");
+  const [eventAttendeeQuery, setEventAttendeeQuery] = useState("");
+  const [eventDraftAttendees, setEventDraftAttendees] = useState<EventAttendee[]>([]);
+  const [eventError, setEventError] = useState<string | null>(null);
   const [personAQuery, setPersonAQuery] = useState("");
   const [personBQuery, setPersonBQuery] = useState("");
   const [connectionType, setConnectionType] = useState<RelationshipType>("friends");
@@ -242,6 +265,56 @@ export default function NetworkGraph() {
     ]
   );
 
+  const selectedEvent = useMemo(
+    () => plannedEvents.find((event) => event.id === selectedEventId) ?? null,
+    [plannedEvents, selectedEventId]
+  );
+
+  const eventGraphData = useMemo(() => {
+    if (!selectedEvent) {
+      return null;
+    }
+
+    const networkNodeById = new Map(graphData.nodes.map((node) => [node.id, node]));
+    const nodes: Array<GraphNode & { isEventOnly?: boolean }> = [];
+    const nodeIds = new Set<string>();
+
+    for (const attendee of selectedEvent.attendees) {
+      const existingNode = attendee.existingNodeId
+        ? networkNodeById.get(attendee.existingNodeId)
+        : undefined;
+
+      if (existingNode) {
+        if (!nodeIds.has(existingNode.id)) {
+          nodes.push(existingNode);
+          nodeIds.add(existingNode.id);
+        }
+        continue;
+      }
+
+      const customId = attendee.id;
+      if (!nodeIds.has(customId)) {
+        nodes.push({
+          id: customId,
+          name: attendee.name,
+          color: "#9ca3af",
+          isEventOnly: true,
+        });
+        nodeIds.add(customId);
+      }
+    }
+
+    const links = graphData.links.filter((link) => {
+      const source = String(link.source);
+      const target = String(link.target);
+      return nodeIds.has(source) && nodeIds.has(target);
+    });
+
+    return { nodes, links };
+  }, [graphData.links, graphData.nodes, selectedEvent]);
+
+  const activeGraphData = selectedEvent ? eventGraphData ?? visibleGraphData : visibleGraphData;
+
   const fetchLinksFromAvailableTable = useCallback(async () => {
     for (const table of RELATION_TABLE_CANDIDATES) {
       const scopedResult = await supabase.from(table).select("*");
@@ -298,16 +371,15 @@ export default function NetworkGraph() {
       return;
     }
 
-    const normalizeName = (value: string) => value.trim().replace(/\s+/g, " ").toLowerCase();
-    const existingNames = new Set(graphData.nodes.map((node) => normalizeName(node.name)));
+    const existingNames = new Set(graphData.nodes.map((node) => normalizePersonName(node.name)));
 
-    if (existingNames.has(normalizeName(name))) {
+    if (existingNames.has(normalizePersonName(name))) {
       const romanNumerals = ["II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X"];
       let suggestedName = `${name} II`;
 
       for (const numeral of romanNumerals) {
         const candidate = `${name} ${numeral}`;
-        if (!existingNames.has(normalizeName(candidate))) {
+        if (!existingNames.has(normalizePersonName(candidate))) {
           suggestedName = candidate;
           break;
         }
@@ -344,6 +416,88 @@ export default function NetworkGraph() {
 
     await fetchGraphData();
     setIsSaving(false);
+  };
+
+  const handleAddEventAttendee = () => {
+    const attendeeName = eventAttendeeQuery.trim();
+    if (!attendeeName) {
+      setEventError("Enter a name to add as an attendee.");
+      return;
+    }
+
+    const matchingNode = graphData.nodes.find(
+      (node) => normalizePersonName(node.name) === normalizePersonName(attendeeName)
+    );
+
+    const duplicateExists = eventDraftAttendees.some((attendee) => {
+      if (attendee.existingNodeId && matchingNode) {
+        return attendee.existingNodeId === matchingNode.id;
+      }
+
+      return normalizePersonName(attendee.name) === normalizePersonName(attendeeName);
+    });
+
+    if (duplicateExists) {
+      setEventError(`"${attendeeName}" is already on this event list.`);
+      return;
+    }
+
+    const nextAttendee: EventAttendee = matchingNode
+      ? {
+          id: `existing:${matchingNode.id}`,
+          name: matchingNode.name,
+          existingNodeId: matchingNode.id,
+        }
+      : {
+          id: `custom:${crypto.randomUUID()}`,
+          name: attendeeName,
+        };
+
+    setEventDraftAttendees((current) => [...current, nextAttendee]);
+    setEventAttendeeQuery("");
+    setEventError(null);
+  };
+
+  const handleRemoveEventAttendee = (attendeeId: string) => {
+    setEventDraftAttendees((current) => current.filter((attendee) => attendee.id !== attendeeId));
+  };
+
+  const handleCreateEvent = () => {
+    const eventName = eventDraftName.trim();
+
+    if (!eventName) {
+      setEventError("Give the event a name.");
+      return;
+    }
+
+    if (eventDraftAttendees.length === 0) {
+      setEventError("Add at least one attendee to create the event.");
+      return;
+    }
+
+    const event: PlannedEvent = {
+      id: crypto.randomUUID(),
+      name: eventName,
+      attendees: eventDraftAttendees,
+      createdAt: new Date().toISOString(),
+    };
+
+    setPlannedEvents((current) => [event, ...current]);
+    setSelectedEventId(event.id);
+    setSidebarTab("events");
+    setEventDraftName("");
+    setEventAttendeeQuery("");
+    setEventDraftAttendees([]);
+    setEventError(null);
+  };
+
+  const handleSelectEvent = (eventId: string) => {
+    setSelectedEventId(eventId);
+    setSidebarTab("events");
+  };
+
+  const handleClearSelectedEvent = () => {
+    setSelectedEventId(null);
   };
 
   const handleSignIn = async () => {
@@ -603,10 +757,17 @@ export default function NetworkGraph() {
     setRequestLastName("");
     setRequestEmail("");
     setPendingRequests([]);
+    setPlannedEvents([]);
+    setSelectedEventId(null);
+    setEventDraftName("");
+    setEventAttendeeQuery("");
+    setEventDraftAttendees([]);
+    setEventError(null);
     setPersonAQuery("");
     setPersonBQuery("");
     setConnectionType("friends");
     setIsApprovalsMinimized(false);
+    setIsSidebarMinimized(false);
     setIsSigningIn(false);
   };
 
@@ -1520,6 +1681,20 @@ export default function NetworkGraph() {
     };
   }, [currentUserId, loadPendingRequests]);
 
+  useEffect(() => {
+    if (!selectedEventId) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      graphRef.current?.zoomToFit?.(600, 80);
+    }, 120);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [selectedEventId, activeGraphData]);
+
   if (!hasMounted) {
     return (
       <main className="flex h-screen w-screen items-center justify-center bg-slate-50 text-slate-500">
@@ -1898,12 +2073,34 @@ export default function NetworkGraph() {
       {/* Graph + Agent Area */}
       <div className="flex-grow overflow-hidden flex">
         <div ref={graphAreaRef} className="flex-1 overflow-hidden relative">
+          {selectedEvent ? (
+            <div className="absolute left-3 top-3 z-10 rounded border border-slate-200 bg-white/95 px-3 py-2 shadow-sm backdrop-blur-sm">
+              <div className="flex items-center gap-2">
+                <p className="text-sm font-semibold text-slate-800">Event View: {selectedEvent.name}</p>
+                <button
+                  onClick={handleClearSelectedEvent}
+                  className="rounded bg-slate-100 px-2 py-1 text-xs text-slate-700 hover:bg-slate-200"
+                >
+                  Show full network
+                </button>
+              </div>
+              <p className="text-xs text-slate-500">
+                Showing {selectedEvent.attendees.length} attendee{selectedEvent.attendees.length === 1 ? "" : "s"} and their existing connections.
+              </p>
+            </div>
+          ) : null}
+
           <ForceGraph2D
             ref={graphRef}
-            graphData={visibleGraphData}
+            graphData={activeGraphData}
             linkLabel="type"
             onBackgroundClick={() => setContextMenu(null)}
             onNodeRightClick={(node, event) => {
+              if ((node as { isEventOnly?: boolean }).isEventOnly) {
+                setError("This attendee was added only for this event and is not in the main network yet.");
+                return;
+              }
+
               const nodeId = getEndpointId((node as { id?: unknown }).id);
               const nodeName = String((node as { name?: unknown }).name ?? "Node");
               if (!nodeId) {
@@ -1988,64 +2185,223 @@ export default function NetworkGraph() {
 
         {currentUserId ? (
           <aside className="w-96 border-l border-slate-200 bg-white flex flex-col">
-            <div className="p-3 border-b border-slate-200">
-              <h2 className="font-semibold text-slate-800">Social Dynamics Agent</h2>
-              <p className="text-xs text-slate-500">Ask questions about group patterns from the graph.</p>
-              {agentError ? <p className="mt-1 text-xs text-red-600">{agentError}</p> : null}
-            </div>
-
-            {agentMessages.length <= 1 ? (
-              <div className="p-3 border-b border-slate-200 space-y-2">
-                <p className="text-xs font-semibold text-slate-600 uppercase">Example Prompts</p>
-                <div className="space-y-1.5">
-                  {EXAMPLE_PROMPTS.map((prompt, index) => (
-                    <button
-                      key={index}
-                      onClick={() => {
-                        void handleAskAgent(prompt);
-                      }}
-                      className="w-full text-left text-xs p-2 rounded border border-slate-200 hover:bg-violet-50 hover:border-violet-300 text-slate-700 transition"
-                    >
-                      {prompt}
-                    </button>
-                  ))}
-                </div>
+            <div className="flex items-start justify-between gap-2 border-b border-slate-200 p-3">
+              <div>
+                <h2 className="font-semibold text-slate-800">Social Dynamics Agent</h2>
+                <p className="text-xs text-slate-500">Ask questions or plan events from the graph.</p>
               </div>
-            ) : null}
-
-            <div className="flex-1 overflow-y-auto p-3 space-y-2">
-              {agentMessages.map((message, index) => (
-                <div
-                  key={`${message.role}-${index}`}
-                  className={
-                    message.role === "user"
-                      ? "ml-6 rounded bg-slate-800 text-white p-2 text-sm"
-                      : "mr-6 rounded bg-slate-100 text-slate-800 p-2 text-sm"
-                  }
-                >
-                  {message.text}
-                </div>
-              ))}
-            </div>
-
-            <div className="p-3 border-t border-slate-200 space-y-2">
-              <textarea
-                value={agentQuestion}
-                onChange={(event) => setAgentQuestion(event.target.value)}
-                rows={3}
-                placeholder="Ask a social question..."
-                className="w-full border border-slate-300 rounded px-3 py-2 text-sm"
-              />
               <button
-                onClick={() => {
-                  void handleAskAgent();
-                }}
-                disabled={isAgentLoading}
-                className="w-full px-4 py-2 bg-violet-600 text-white rounded hover:bg-violet-700"
+                onClick={() => setIsSidebarMinimized((current) => !current)}
+                className="rounded bg-slate-100 px-2 py-1 text-xs text-slate-700 hover:bg-slate-200"
               >
-                {isAgentLoading ? "Thinking..." : "Ask Agent"}
+                {isSidebarMinimized ? "▲" : "▼"}
               </button>
             </div>
+
+            {!isSidebarMinimized ? (
+              <>
+                <div className="flex border-b border-slate-200">
+                  <button
+                    onClick={() => setSidebarTab("agent")}
+                    className={`flex-1 px-3 py-2 text-sm font-medium ${
+                      sidebarTab === "agent"
+                        ? "border-b-2 border-violet-600 bg-violet-50 text-violet-700"
+                        : "text-slate-600 hover:bg-slate-50"
+                    }`}
+                  >
+                    Gemini
+                  </button>
+                  <button
+                    onClick={() => setSidebarTab("events")}
+                    className={`flex-1 px-3 py-2 text-sm font-medium ${
+                      sidebarTab === "events"
+                        ? "border-b-2 border-violet-600 bg-violet-50 text-violet-700"
+                        : "text-slate-600 hover:bg-slate-50"
+                    }`}
+                  >
+                    Events
+                  </button>
+                </div>
+
+                {sidebarTab === "agent" ? (
+                  <>
+                    {agentMessages.length <= 1 ? (
+                      <div className="p-3 border-b border-slate-200 space-y-2">
+                        <p className="text-xs font-semibold text-slate-600 uppercase">Example Prompts</p>
+                        <div className="space-y-1.5">
+                          {EXAMPLE_PROMPTS.map((prompt, index) => (
+                            <button
+                              key={index}
+                              onClick={() => {
+                                void handleAskAgent(prompt);
+                              }}
+                              className="w-full text-left text-xs p-2 rounded border border-slate-200 hover:bg-violet-50 hover:border-violet-300 text-slate-700 transition"
+                            >
+                              {prompt}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+
+                    <div className="flex-1 overflow-y-auto p-3 space-y-2">
+                      {agentMessages.map((message, index) => (
+                        <div
+                          key={`${message.role}-${index}`}
+                          className={
+                            message.role === "user"
+                              ? "ml-6 rounded bg-slate-800 text-white p-2 text-sm"
+                              : "mr-6 rounded bg-slate-100 text-slate-800 p-2 text-sm"
+                          }
+                        >
+                          {message.text}
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="p-3 border-t border-slate-200 space-y-2">
+                      <textarea
+                        value={agentQuestion}
+                        onChange={(event) => setAgentQuestion(event.target.value)}
+                        rows={3}
+                        placeholder="Ask a social question..."
+                        className="w-full border border-slate-300 rounded px-3 py-2 text-sm"
+                      />
+                      <button
+                        onClick={() => {
+                          void handleAskAgent();
+                        }}
+                        disabled={isAgentLoading}
+                        className="w-full px-4 py-2 bg-violet-600 text-white rounded hover:bg-violet-700"
+                      >
+                        {isAgentLoading ? "Thinking..." : "Ask Agent"}
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <div className="flex flex-1 flex-col overflow-hidden">
+                    <div className="border-b border-slate-200 p-3 space-y-3">
+                      <div className="space-y-1">
+                        <label className="text-sm font-medium text-slate-700">Event name</label>
+                        <input
+                          value={eventDraftName}
+                          onChange={(event) => {
+                            setEventDraftName(event.target.value);
+                            setEventError(null);
+                          }}
+                          placeholder="Quarterly offsite"
+                          className="w-full rounded border border-slate-300 px-3 py-2 text-sm"
+                        />
+                      </div>
+
+                      <div className="space-y-2">
+                        <label className="text-sm font-medium text-slate-700">Add attendees</label>
+                        <div className="flex gap-2">
+                          <input
+                            list="event-attendee-options"
+                            value={eventAttendeeQuery}
+                            onChange={(event) => {
+                              setEventAttendeeQuery(event.target.value);
+                              setEventError(null);
+                            }}
+                            placeholder="Type an existing or new name"
+                            className="min-w-0 flex-1 rounded border border-slate-300 px-3 py-2 text-sm"
+                          />
+                          <button
+                            onClick={handleAddEventAttendee}
+                            className="rounded bg-slate-800 px-3 py-2 text-sm text-white hover:bg-slate-900"
+                          >
+                            Add
+                          </button>
+                        </div>
+                        <datalist id="event-attendee-options">
+                          {graphData.nodes.map((node) => (
+                            <option key={node.id} value={node.name} />
+                          ))}
+                        </datalist>
+                        <div className="max-h-28 overflow-y-auto rounded border border-slate-200 bg-slate-50 p-2">
+                          {eventDraftAttendees.length === 0 ? (
+                            <p className="text-xs text-slate-500">No attendees added yet.</p>
+                          ) : (
+                            <div className="flex flex-wrap gap-2">
+                              {eventDraftAttendees.map((attendee) => (
+                                <span
+                                  key={attendee.id}
+                                  className="inline-flex items-center gap-2 rounded-full bg-white px-3 py-1 text-xs text-slate-700 border border-slate-200"
+                                >
+                                  {attendee.name}
+                                  <button
+                                    onClick={() => handleRemoveEventAttendee(attendee.id)}
+                                    className="text-slate-400 hover:text-slate-700"
+                                    aria-label={`Remove ${attendee.name}`}
+                                  >
+                                    ×
+                                  </button>
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {eventError ? <p className="text-xs text-red-600">{eventError}</p> : null}
+
+                      <button
+                        onClick={handleCreateEvent}
+                        className="w-full rounded bg-violet-600 px-4 py-2 text-sm text-white hover:bg-violet-700"
+                      >
+                        Create Event
+                      </button>
+                    </div>
+
+                    <div className="flex-1 overflow-y-auto p-3 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <p className="text-xs font-semibold uppercase text-slate-500">Saved events</p>
+                        {selectedEvent ? (
+                          <button
+                            onClick={handleClearSelectedEvent}
+                            className="text-xs text-slate-500 hover:text-slate-700"
+                          >
+                            Clear view
+                          </button>
+                        ) : null}
+                      </div>
+
+                      {plannedEvents.length === 0 ? (
+                        <p className="text-sm text-slate-500">No events created yet.</p>
+                      ) : (
+                        <div className="space-y-2">
+                          {plannedEvents.map((event) => {
+                            const isSelected = event.id === selectedEventId;
+                            const customCount = event.attendees.filter((attendee) => !attendee.existingNodeId).length;
+
+                            return (
+                              <button
+                                key={event.id}
+                                onClick={() => handleSelectEvent(event.id)}
+                                className={`w-full rounded border px-3 py-2 text-left transition ${
+                                  isSelected
+                                    ? "border-violet-500 bg-violet-50"
+                                    : "border-slate-200 bg-white hover:bg-slate-50"
+                                }`}
+                              >
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="text-sm font-medium text-slate-800">{event.name}</span>
+                                  <span className="text-xs text-slate-500">{event.attendees.length} people</span>
+                                </div>
+                                <p className="mt-1 text-xs text-slate-500">
+                                  {customCount > 0 ? `${customCount} custom attendee${customCount === 1 ? "" : "s"}` : "All attendees exist in the network"}
+                                </p>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </>
+            ) : null}
           </aside>
         ) : null}
       </div>
