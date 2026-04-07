@@ -62,6 +62,8 @@ type PlannedEventRecord = {
 type PendingEventConfirmation = {
   eventName: string;
   attendeeNames: string[];
+  sourceQuestion: string;
+  shouldSuggestMore: boolean;
 };
 
 type NodeLayoutSnapshot = {
@@ -1745,13 +1747,18 @@ export default function NetworkGraph() {
     }
 
     let eventNamePart = normalized.slice(0, withIndex).trim();
-    const attendeePart = normalized.slice(withIndex + 6).trim();
+    const attendeePartRaw = normalized.slice(withIndex + 6).trim();
+    const attendeePart = attendeePartRaw.split(/[.?!]/)[0]?.trim() ?? "";
 
     eventNamePart = eventNamePart
       .replace(/^show me( what)?( a| an)?\s+/i, "")
       .replace(/^create( me)?( a| an)?\s+/i, "")
       .replace(/^make( me)?( a| an)?\s+/i, "")
       .replace(/^plan( me)?( a| an)?\s+/i, "")
+      .replace(/^i am planning( a| an)?\s+/i, "")
+      .replace(/^i'?m planning( a| an)?\s+/i, "")
+      .replace(/^we are planning( a| an)?\s+/i, "")
+      .replace(/^we'?re planning( a| an)?\s+/i, "")
       .replace(/\s+(would look like|looks like|look like)$/i, "")
       .replace(/\s+event$/i, "")
       .trim();
@@ -1761,7 +1768,8 @@ export default function NetworkGraph() {
     const attendeeNames = attendeePart
       .replace(/[.?!]$/g, "")
       .split(/,|\band\b/i)
-      .map((name) => name.trim())
+      .map((name) => name.trim().replace(/^and\s+/i, ""))
+      .map((name) => name.replace(/^['\"]|['\"]$/g, ""))
       .filter(Boolean);
 
     if (attendeeNames.length === 0) {
@@ -1892,16 +1900,113 @@ export default function NetworkGraph() {
     return `Created event \"${event.name}\" with ${attendees.length} attendee${attendees.length === 1 ? "" : "s"}, and switched to Events view.`;
   };
 
+  const suggestAdditionalAttendees = async (eventName: string, attendeeNames: string[]) => {
+    const normalizedCurrentNames = new Set(attendeeNames.map((name) => normalizePersonName(name)));
+
+    try {
+      const response = await fetch("/api/social-agent", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          question:
+            `I am planning an event called "${eventName}" with these attendees: ${attendeeNames.join(", ")}. ` +
+            "Who else could I add to increase social connection? " +
+            "Suggest up to 5 names from the existing graph only, excluding current attendees. " +
+            "Use short bullet points with a one-line reason each.",
+          graphData,
+        }),
+      });
+
+      if (response.ok) {
+        const data = (await response.json()) as { answer?: string };
+        const answer = data.answer?.trim();
+        if (answer) {
+          return answer;
+        }
+      }
+    } catch {
+      // Fall back to local heuristic below
+    }
+
+    const nodeById = new Map(graphData.nodes.map((node) => [node.id, node]));
+    const selectedIds = new Set(
+      graphData.nodes
+        .filter((node) => normalizedCurrentNames.has(normalizePersonName(node.name)))
+        .map((node) => node.id)
+    );
+
+    const scores = new Map<string, { positive: number; negative: number }>();
+
+    for (const link of graphData.links) {
+      const source = getLinkEndpointId((link as { source?: unknown }).source);
+      const target = getLinkEndpointId((link as { target?: unknown }).target);
+      if (!source || !target) {
+        continue;
+      }
+
+      const type = String(link.type ?? "friends").toLowerCase();
+      const sourceSelected = selectedIds.has(source);
+      const targetSelected = selectedIds.has(target);
+      if (sourceSelected === targetSelected) {
+        continue;
+      }
+
+      const candidateId = sourceSelected ? target : source;
+      const candidateName = nodeById.get(candidateId)?.name;
+      if (!candidateName || normalizedCurrentNames.has(normalizePersonName(candidateName))) {
+        continue;
+      }
+
+      const current = scores.get(candidateId) ?? { positive: 0, negative: 0 };
+      if (type === "friends" || type === "coworkers" || type === "family" || type === "lovers") {
+        current.positive += 1;
+      }
+      if (type === "enemies") {
+        current.negative += 1;
+      }
+      scores.set(candidateId, current);
+    }
+
+    const ranked = [...scores.entries()]
+      .map(([id, score]) => ({
+        id,
+        name: nodeById.get(id)?.name ?? id,
+        score: score.positive - score.negative * 2,
+        positive: score.positive,
+        negative: score.negative,
+      }))
+      .filter((entry) => entry.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 5);
+
+    if (ranked.length === 0) {
+      return "I couldn't find strong additional candidates from the current graph without introducing likely conflicts.";
+    }
+
+    return [
+      "Suggested additions (local fallback):",
+      ...ranked.map(
+        (entry) =>
+          `- ${entry.name} (connections: +${entry.positive}, conflicts: ${entry.negative})`
+      ),
+    ].join("\n");
+  };
+
   const handleConfirmAgentEventCreation = async () => {
     if (!pendingEventConfirmation) {
       return;
     }
 
-    const { eventName, attendeeNames } = pendingEventConfirmation;
+    const { eventName, attendeeNames, shouldSuggestMore } = pendingEventConfirmation;
     setPendingEventConfirmation(null);
 
     const intentResult = await createEventFromPromptIntent(eventName, attendeeNames);
     setAgentMessages((current) => [...current, { role: "assistant", text: intentResult }]);
+
+    if (shouldSuggestMore && intentResult.toLowerCase().startsWith("created event")) {
+      const suggestions = await suggestAdditionalAttendees(eventName, attendeeNames);
+      setAgentMessages((current) => [...current, { role: "assistant", text: suggestions }]);
+    }
   };
 
   const handleCancelAgentEventCreation = () => {
@@ -1938,9 +2043,14 @@ export default function NetworkGraph() {
 
     const eventIntent = parseEventIntent(question);
     if (eventIntent) {
+      const shouldSuggestMore =
+        /who else|anyone else|who should .*add|could i add|what else should/i.test(question);
+
       setPendingEventConfirmation({
         eventName: eventIntent.eventName,
         attendeeNames: eventIntent.attendeeNames,
+        sourceQuestion: question,
+        shouldSuggestMore,
       });
 
       setAgentMessages((current) => [
