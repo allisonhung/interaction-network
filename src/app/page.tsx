@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from "react";
 import dynamic from "next/dynamic";
 import { supabase } from "@/lib/supabase/client";
 import type { ForceGraphMethods, LinkObject, NodeObject } from "react-force-graph-2d";
@@ -1727,6 +1727,47 @@ export default function NetworkGraph() {
     return "I can currently answer: party invite optimization (maximize friends with no enemies), most connected person, and current conflicts. Try one of those phrasings.";
   };
 
+  const renderMessageText = (rawText: string) => {
+    const text = rawText.replace(/\\n/g, "\n");
+
+    return text.split("\n").map((line, lineIndex) => {
+      const parts: Array<string | ReactNode> = [];
+      const boldPattern = /\*\*(.+?)\*\*/g;
+      let lastIndex = 0;
+      let match = boldPattern.exec(line);
+
+      while (match) {
+        const matchText = match[1] ?? "";
+        const matchStart = match.index;
+        const matchEnd = matchStart + match[0].length;
+
+        if (matchStart > lastIndex) {
+          parts.push(line.slice(lastIndex, matchStart));
+        }
+
+        parts.push(
+          <strong key={`bold-${lineIndex}-${matchStart}`} className="font-semibold">
+            {matchText}
+          </strong>
+        );
+
+        lastIndex = matchEnd;
+        match = boldPattern.exec(line);
+      }
+
+      if (lastIndex < line.length) {
+        parts.push(line.slice(lastIndex));
+      }
+
+      return (
+        <span key={`line-${lineIndex}`}>
+          {parts.length > 0 ? parts : line}
+          {lineIndex < text.split("\n").length - 1 ? <br /> : null}
+        </span>
+      );
+    });
+  };
+
   const parseEventIntent = (question: string) => {
     const normalized = question.replace(/\s+/g, " ").trim();
     const lower = normalized.toLowerCase();
@@ -3073,7 +3114,7 @@ export default function NetworkGraph() {
                               : "mr-6 rounded bg-slate-100 text-slate-800 p-2 text-sm"
                           }
                         >
-                          {message.text}
+                          {renderMessageText(message.text)}
                         </div>
                       ))}
                     </div>
