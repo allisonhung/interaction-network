@@ -1105,8 +1105,8 @@ export default function NetworkGraph() {
     return "I can currently answer: party invite optimization (maximize friends with no enemies), most connected person, and current conflicts. Try one of those phrasings.";
   };
 
-  const handleAskAgent = async () => {
-    const question = agentQuestion.trim();
+  const handleAskAgent = async (overrideQuestion?: string) => {
+    const question = (overrideQuestion ?? agentQuestion).trim();
     if (!question) {
       return;
     }
@@ -1117,7 +1117,9 @@ export default function NetworkGraph() {
       ...current,
       { role: "user", text: question },
     ]);
-    setAgentQuestion("");
+    if (!overrideQuestion) {
+      setAgentQuestion("");
+    }
 
     try {
       const response = await fetch("/api/social-agent", {
@@ -1154,6 +1156,9 @@ export default function NetworkGraph() {
       ]);
     } finally {
       setIsAgentLoading(false);
+      if (overrideQuestion) {
+        setAgentQuestion("");
+      }
     }
   };
 
@@ -1932,46 +1937,7 @@ export default function NetworkGraph() {
                     <button
                       key={index}
                       onClick={() => {
-                        setAgentQuestion(prompt);
-                        // Schedule the send to happen after state update
-                        setTimeout(() => {
-                          setAgentMessages((current) => [
-                            ...current,
-                            { role: "user", text: prompt },
-                          ]);
-                          void (async () => {
-                            setIsAgentLoading(true);
-                            setAgentError(null);
-
-                            const visible = getVisibleGraphData();
-                            const summary = `Nodes: ${visible.nodes.length}, Links: ${visible.links.length}`;
-
-                            try {
-                              const response = await fetch("/api/social-agent", {
-                                method: "POST",
-                                headers: { "Content-Type": "application/json" },
-                                body: JSON.stringify({ question: prompt, graphSummary: summary }),
-                              });
-
-                              if (!response.ok) {
-                                const error = await response.text();
-                                throw new Error(error);
-                              }
-
-                              const { answer } = (await response.json()) as { answer?: string };
-                              setAgentMessages((current) => [
-                                ...current,
-                                { role: "assistant", text: answer ?? "No response." },
-                              ]);
-                            } catch (err) {
-                              const msg = err instanceof Error ? err.message : "Error querying agent.";
-                              setAgentError(msg);
-                            } finally {
-                              setIsAgentLoading(false);
-                              setAgentQuestion("");
-                            }
-                          })();
-                        }, 0);
+                        void handleAskAgent(prompt);
                       }}
                       className="w-full text-left text-xs p-2 rounded border border-slate-200 hover:bg-violet-50 hover:border-violet-300 text-slate-700 transition"
                     >

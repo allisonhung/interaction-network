@@ -25,6 +25,30 @@ const getAllowedApproverEmails = () => {
     .filter(Boolean);
 };
 
+const getInviteRedirectUrl = (request: Request) => {
+  const configuredRedirect =
+    process.env.SUPABASE_INVITE_REDIRECT_URL ??
+    process.env.NEXT_PUBLIC_APP_URL ??
+    process.env.NEXT_PUBLIC_SITE_URL;
+
+  if (configuredRedirect?.trim()) {
+    return configuredRedirect.trim().replace(/\/$/, "");
+  }
+
+  const vercelUrl = process.env.VERCEL_PROJECT_PRODUCTION_URL ?? process.env.VERCEL_URL;
+  if (vercelUrl?.trim()) {
+    const host = vercelUrl.trim().replace(/^https?:\/\//, "").replace(/\/$/, "");
+    return `https://${host}`;
+  }
+
+  const origin = request.headers.get("origin")?.trim();
+  if (origin && !origin.includes("localhost")) {
+    return origin.replace(/\/$/, "");
+  }
+
+  return undefined;
+};
+
 export async function POST(request: Request) {
   const supabaseUrl = process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL;
   const supabaseAnonKey = process.env.SUPABASE_ANON_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
@@ -106,7 +130,11 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "No email found for this request." }, { status: 400 });
   }
 
-  const inviteResult = await adminClient.auth.admin.inviteUserByEmail(email);
+  const redirectTo = getInviteRedirectUrl(request);
+  const inviteResult = await adminClient.auth.admin.inviteUserByEmail(
+    email,
+    redirectTo ? { redirectTo } : undefined
+  );
   if (inviteResult.error) {
     return NextResponse.json(
       { error: `Unable to send invite email: ${inviteResult.error.message}` },
@@ -143,5 +171,6 @@ export async function POST(request: Request) {
 
   return NextResponse.json({
     message: `Invite email sent to ${email}.`,
+    redirectTo,
   });
 }
