@@ -59,6 +59,11 @@ type PlannedEventRecord = {
   createdAt?: unknown;
 };
 
+type PendingEventConfirmation = {
+  eventName: string;
+  attendeeNames: string[];
+};
+
 type NodeLayoutSnapshot = {
   x?: number;
   y?: number;
@@ -187,6 +192,8 @@ export default function NetworkGraph() {
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [isLoadingEvents, setIsLoadingEvents] = useState(false);
   const [editingEventId, setEditingEventId] = useState<string | null>(null);
+  const [pendingEventConfirmation, setPendingEventConfirmation] =
+    useState<PendingEventConfirmation | null>(null);
   const [eventDraftName, setEventDraftName] = useState("");
   const [eventAttendeeQuery, setEventAttendeeQuery] = useState("");
   const [eventDraftAttendees, setEventDraftAttendees] = useState<EventAttendee[]>([]);
@@ -1177,6 +1184,7 @@ export default function NetworkGraph() {
     setPlannedEvents([]);
     setSelectedEventId(null);
     setEditingEventId(null);
+    setPendingEventConfirmation(null);
     setEventDraftName("");
     setEventAttendeeQuery("");
     setEventDraftAttendees([]);
@@ -1717,6 +1725,201 @@ export default function NetworkGraph() {
     return "I can currently answer: party invite optimization (maximize friends with no enemies), most connected person, and current conflicts. Try one of those phrasings.";
   };
 
+  const parseEventIntent = (question: string) => {
+    const normalized = question.replace(/\s+/g, " ").trim();
+    const lower = normalized.toLowerCase();
+
+    if (!lower.includes(" with ")) {
+      return null;
+    }
+
+    const eventIntentMarkers = ["show me", "create", "make", "plan", "event", "party", "dinner"];
+    const hasIntentMarker = eventIntentMarkers.some((marker) => lower.includes(marker));
+    if (!hasIntentMarker) {
+      return null;
+    }
+
+    const withIndex = lower.lastIndexOf(" with ");
+    if (withIndex === -1) {
+      return null;
+    }
+
+    let eventNamePart = normalized.slice(0, withIndex).trim();
+    const attendeePart = normalized.slice(withIndex + 6).trim();
+
+    eventNamePart = eventNamePart
+      .replace(/^show me( what)?( a| an)?\s+/i, "")
+      .replace(/^create( me)?( a| an)?\s+/i, "")
+      .replace(/^make( me)?( a| an)?\s+/i, "")
+      .replace(/^plan( me)?( a| an)?\s+/i, "")
+      .replace(/\s+(would look like|looks like|look like)$/i, "")
+      .replace(/\s+event$/i, "")
+      .trim();
+
+    const eventName = eventNamePart || "New Event";
+
+    const attendeeNames = attendeePart
+      .replace(/[.?!]$/g, "")
+      .split(/,|\band\b/i)
+      .map((name) => name.trim())
+      .filter(Boolean);
+
+    if (attendeeNames.length === 0) {
+      return null;
+    }
+
+    return { eventName, attendeeNames };
+  };
+
+  const createEventFromPromptIntent = async (eventName: string, attendeeNames: string[]) => {
+    if (!currentUserId) {
+      return "Sign in first, then I can create events for you.";
+    }
+
+    const attendees: EventAttendee[] = attendeeNames.reduce<EventAttendee[]>((acc, rawName) => {
+      const name = rawName.trim();
+      if (!name) {
+        return acc;
+      }
+
+      const matchingNode = graphData.nodes.find(
+        (node) => normalizePersonName(node.name) === normalizePersonName(name)
+      );
+
+      const duplicate = acc.some((attendee) => {
+        if (attendee.existingNodeId && matchingNode) {
+          return attendee.existingNodeId === matchingNode.id;
+        }
+
+        return normalizePersonName(attendee.name) === normalizePersonName(name);
+      });
+
+      if (duplicate) {
+        return acc;
+      }
+
+      if (matchingNode) {
+        acc.push({
+          id: `existing:${matchingNode.id}`,
+          name: matchingNode.name,
+          existingNodeId: matchingNode.id,
+        });
+      } else {
+        acc.push({
+          id: `custom:${crypto.randomUUID()}`,
+          name,
+        });
+      }
+
+      return acc;
+    }, []);
+
+    if (attendees.length === 0) {
+      return "I couldn't identify any attendee names to add.";
+    }
+
+    const event: PlannedEvent = {
+      id: crypto.randomUUID(),
+      name: eventName,
+      attendees,
+      createdAt: new Date().toISOString(),
+    };
+
+    setIsLoadingEvents(true);
+    let savedRemotely = false;
+
+    for (const table of EVENT_TABLE_CANDIDATES) {
+      const insertResult = await supabase.from(table).insert({
+        id: event.id,
+        user_id: currentUserId,
+        name: event.name,
+        attendees: event.attendees,
+        created_at: event.createdAt,
+      });
+
+      if (insertResult.error) {
+        if (hasMissingTableError(insertResult.error.message, table)) {
+          continue;
+        }
+
+        if (hasMissingColumnError(insertResult.error.message, "attendees")) {
+          const retryResult = await supabase.from(table).insert({
+            id: event.id,
+            user_id: currentUserId,
+            name: event.name,
+            created_at: event.createdAt,
+          });
+
+          if (retryResult.error) {
+            setIsLoadingEvents(false);
+            return `I couldn't create that event: ${retryResult.error.message}`;
+          }
+
+          savedRemotely = true;
+          break;
+        }
+
+        setIsLoadingEvents(false);
+        return `I couldn't create that event: ${insertResult.error.message}`;
+      }
+
+      savedRemotely = true;
+      break;
+    }
+
+    if (!savedRemotely) {
+      const nextEvents = [event, ...plannedEvents];
+      savePlannedEventsToLocalStorage(nextEvents);
+      setPlannedEvents(nextEvents);
+      setSelectedEventId(event.id);
+      setSidebarTab("events");
+      setEditingEventId(null);
+      setEventError(
+        "Created locally in this browser. Create a planned_events table in Supabase to sync events across devices."
+      );
+      setIsLoadingEvents(false);
+
+      return `Created event \"${event.name}\" with ${attendees.length} attendee${attendees.length === 1 ? "" : "s"}, and switched to Events view.`;
+    }
+
+    await loadPlannedEvents();
+    setSelectedEventId(event.id);
+    setSidebarTab("events");
+    setEditingEventId(null);
+    setEventError(null);
+    setIsLoadingEvents(false);
+
+    return `Created event \"${event.name}\" with ${attendees.length} attendee${attendees.length === 1 ? "" : "s"}, and switched to Events view.`;
+  };
+
+  const handleConfirmAgentEventCreation = async () => {
+    if (!pendingEventConfirmation) {
+      return;
+    }
+
+    const { eventName, attendeeNames } = pendingEventConfirmation;
+    setPendingEventConfirmation(null);
+
+    const intentResult = await createEventFromPromptIntent(eventName, attendeeNames);
+    setAgentMessages((current) => [...current, { role: "assistant", text: intentResult }]);
+  };
+
+  const handleCancelAgentEventCreation = () => {
+    if (!pendingEventConfirmation) {
+      return;
+    }
+
+    const { eventName } = pendingEventConfirmation;
+    setPendingEventConfirmation(null);
+    setAgentMessages((current) => [
+      ...current,
+      {
+        role: "assistant",
+        text: `Cancelled. I did not create the event \"${eventName}\".`,
+      },
+    ]);
+  };
+
   const handleAskAgent = async (overrideQuestion?: string) => {
     const question = (overrideQuestion ?? agentQuestion).trim();
     if (!question) {
@@ -1731,6 +1934,29 @@ export default function NetworkGraph() {
     ]);
     if (!overrideQuestion) {
       setAgentQuestion("");
+    }
+
+    const eventIntent = parseEventIntent(question);
+    if (eventIntent) {
+      setPendingEventConfirmation({
+        eventName: eventIntent.eventName,
+        attendeeNames: eventIntent.attendeeNames,
+      });
+
+      setAgentMessages((current) => [
+        ...current,
+        {
+          role: "assistant",
+          text: `I can create event \"${eventIntent.eventName}\" with ${eventIntent.attendeeNames.join(
+            ", "
+          )}. Please confirm in the popup window.`,
+        },
+      ]);
+      setIsAgentLoading(false);
+      if (overrideQuestion) {
+        setAgentQuestion("");
+      }
+      return;
     }
 
     try {
@@ -2363,6 +2589,60 @@ export default function NetworkGraph() {
                 className="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700 disabled:opacity-60 disabled:cursor-not-allowed"
               >
                 {isSigningIn ? "Submitting..." : "Submit Request"}
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {pendingEventConfirmation ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/35 p-4">
+          <section className="w-full max-w-lg rounded-lg border border-slate-200 bg-white shadow-xl">
+            <div className="border-b border-slate-200 px-4 py-3">
+              <h3 className="text-base font-semibold text-slate-800">Confirm Event Creation</h3>
+              <p className="text-sm text-slate-600">
+                The app is about to create this event from your agent prompt.
+              </p>
+            </div>
+
+            <div className="space-y-3 p-4">
+              <div>
+                <p className="text-xs font-semibold uppercase text-slate-500">Event Name</p>
+                <p className="text-sm text-slate-800">{pendingEventConfirmation.eventName}</p>
+              </div>
+
+              <div>
+                <p className="text-xs font-semibold uppercase text-slate-500">Attendees</p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {pendingEventConfirmation.attendeeNames.map((name) => (
+                    <span
+                      key={name}
+                      className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs text-slate-700"
+                    >
+                      {name}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 border-t border-slate-200 px-4 py-3">
+              <button
+                type="button"
+                onClick={handleCancelAgentEventCreation}
+                className="px-4 py-2 bg-slate-100 text-slate-700 rounded hover:bg-slate-200"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  void handleConfirmAgentEventCreation();
+                }}
+                disabled={isLoadingEvents}
+                className="px-4 py-2 bg-violet-600 text-white rounded hover:bg-violet-700 disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                {isLoadingEvents ? "Creating..." : "Create Event"}
               </button>
             </div>
           </section>
