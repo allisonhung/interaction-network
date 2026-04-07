@@ -621,8 +621,8 @@ export default function NetworkGraph() {
     setIsSaving(false);
   };
 
-  const handleAddEventAttendee = () => {
-    const attendeeName = eventAttendeeQuery.trim();
+  const handleAddEventAttendee = (attendeeNameInput?: string) => {
+    const attendeeName = (attendeeNameInput ?? eventAttendeeQuery).trim();
     if (!attendeeName) {
       setEventError("Enter a name to add as an attendee.");
       return;
@@ -641,7 +641,6 @@ export default function NetworkGraph() {
     });
 
     if (duplicateExists) {
-      setEventError(`"${attendeeName}" is already on this event list.`);
       return;
     }
 
@@ -2583,14 +2582,25 @@ export default function NetworkGraph() {
                             list="event-attendee-options"
                             value={eventAttendeeQuery}
                             onChange={(event) => {
-                              setEventAttendeeQuery(event.target.value);
+                              const nextValue = event.target.value;
+                              setEventAttendeeQuery(nextValue);
                               setEventError(null);
+
+                              const exactMatch = graphData.nodes.find(
+                                (node) => normalizePersonName(node.name) === normalizePersonName(nextValue)
+                              );
+
+                              if (exactMatch) {
+                                void handleAddEventAttendee(exactMatch.name);
+                              }
                             }}
                             placeholder="Type an existing or new name"
                             className="min-w-0 flex-1 rounded border border-slate-300 px-3 py-2 text-sm"
                           />
                           <button
-                            onClick={handleAddEventAttendee}
+                            onClick={() => {
+                              void handleAddEventAttendee();
+                            }}
                             className="rounded bg-slate-800 px-3 py-2 text-sm text-white hover:bg-slate-900"
                           >
                             Add
