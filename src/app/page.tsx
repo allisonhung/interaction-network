@@ -128,6 +128,8 @@ export default function NetworkGraph() {
   const [pendingRequests, setPendingRequests] = useState<SignupRequest[]>([]);
   const [isLoadingPendingRequests, setIsLoadingPendingRequests] = useState(false);
   const [isApprovingRequestId, setIsApprovingRequestId] = useState<string | null>(null);
+  const [isDenyingRequestId, setIsDenyingRequestId] = useState<string | null>(null);
+  const [isApprovalsMinimized, setIsApprovalsMinimized] = useState(false);
   const [personAQuery, setPersonAQuery] = useState("");
   const [personBQuery, setPersonBQuery] = useState("");
   const [connectionType, setConnectionType] = useState<RelationshipType>("friends");
@@ -422,6 +424,48 @@ export default function NetworkGraph() {
     setIsApprovingRequestId(null);
   };
 
+  const handleDenyRequest = async (requestId: string) => {
+    if (!currentUserId) {
+      setError("You must be signed in before denying requests.");
+      return;
+    }
+
+    setIsDenyingRequestId(requestId);
+    setError(null);
+    setAuthMessage(null);
+
+    const {
+      data: { session },
+      error: sessionError,
+    } = await supabase.auth.getSession();
+
+    if (sessionError || !session?.access_token) {
+      setError(sessionError?.message ?? "No active session token found.");
+      setIsDenyingRequestId(null);
+      return;
+    }
+
+    const response = await fetch("/api/admin/deny-signup", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${session.access_token}`,
+      },
+      body: JSON.stringify({ requestId }),
+    });
+
+    if (!response.ok) {
+      const errorBody = (await response.json().catch(() => null)) as { error?: string } | null;
+      setError(errorBody?.error ?? "Unable to deny this request.");
+      setIsDenyingRequestId(null);
+      return;
+    }
+
+    setAuthMessage("Request denied.");
+    await loadPendingRequests();
+    setIsDenyingRequestId(null);
+  };
+
   const handleCreateAccountRequest = async () => {
     const firstName = requestFirstName.trim();
     const lastName = requestLastName.trim();
@@ -520,6 +564,7 @@ export default function NetworkGraph() {
     setPersonAQuery("");
     setPersonBQuery("");
     setConnectionType("friends");
+    setIsApprovalsMinimized(false);
     setIsSigningIn(false);
   };
 
@@ -1618,54 +1663,76 @@ export default function NetworkGraph() {
       ) : null}
 
       {currentUserId ? (
-        <section className="p-4 bg-white border-t border-slate-200">
-          <div className="flex items-center justify-between gap-3">
-            <h3 className="text-sm font-semibold text-slate-800">Pending Account Requests</h3>
+        <div className="fixed bottom-4 left-4 w-96 z-20 rounded border border-slate-300 bg-white shadow-lg flex flex-col">
+          <div className="flex items-center justify-between gap-2 bg-slate-100 px-4 py-2 border-b border-slate-300 rounded-t">
+            <h3 className="text-sm font-semibold text-slate-800">Pending Requests ({pendingRequests.length})</h3>
             <button
-              onClick={() => {
-                void loadPendingRequests();
-              }}
-              disabled={isLoadingPendingRequests || isSigningIn}
-              className="px-3 py-1.5 bg-slate-100 text-slate-700 rounded hover:bg-slate-200 disabled:opacity-60 disabled:cursor-not-allowed"
+              onClick={() => setIsApprovalsMinimized(!isApprovalsMinimized)}
+              className="px-2 py-1 text-xs bg-slate-200 rounded hover:bg-slate-300"
             >
-              {isLoadingPendingRequests ? "Loading..." : "Refresh"}
+              {isApprovalsMinimized ? "▲" : "▼"}
             </button>
           </div>
 
-          <div className="mt-3 space-y-2">
-            {pendingRequests.length === 0 ? (
-              <p className="text-sm text-slate-500">No pending requests.</p>
-            ) : (
-              pendingRequests.map((request) => {
-                const displayName = [request.firstName, request.lastName].filter(Boolean).join(" ");
-                const isApproving = isApprovingRequestId === request.id;
+          {!isApprovalsMinimized ? (
+            <>
+              <div className="max-h-80 overflow-y-auto p-3 space-y-2">
+                {pendingRequests.length === 0 ? (
+                  <p className="text-sm text-slate-500">No pending requests.</p>
+                ) : (
+                  pendingRequests.map((request) => {
+                    const displayName = [request.firstName, request.lastName]
+                      .filter(Boolean)
+                      .join(" ");
+                    const isApproving = isApprovingRequestId === request.id;
+                    const isDenying = isDenyingRequestId === request.id;
 
-                return (
-                  <div
-                    key={request.id}
-                    className="flex flex-wrap items-center justify-between gap-3 rounded border border-slate-200 bg-slate-50 px-3 py-2"
-                  >
-                    <div>
-                      <p className="text-sm font-medium text-slate-800">
-                        {displayName || "No name provided"}
-                      </p>
-                      <p className="text-xs text-slate-600">{request.email}</p>
-                    </div>
-                    <button
-                      onClick={() => {
-                        void handleApproveRequest(request.id, request.email);
-                      }}
-                      disabled={isApproving}
-                      className="px-3 py-1.5 bg-emerald-600 text-white rounded hover:bg-emerald-700 disabled:opacity-60 disabled:cursor-not-allowed"
-                    >
-                      {isApproving ? "Approving..." : "Approve + Send Invite"}
-                    </button>
-                  </div>
-                );
-              })
-            )}
-          </div>
-        </section>
+                    return (
+                      <div
+                        key={request.id}
+                        className="rounded border border-slate-200 bg-slate-50 px-3 py-2"
+                      >
+                        <p className="text-xs font-medium text-slate-800">
+                          {displayName || "No name"}
+                        </p>
+                        <p className="text-xs text-slate-600">{request.email}</p>
+                        <div className="mt-2 flex gap-2">
+                          <button
+                            onClick={() => {
+                              void handleApproveRequest(request.id, request.email);
+                            }}
+                            disabled={isApproving || isDenying}
+                            className="flex-1 px-2 py-1 text-xs bg-emerald-600 text-white rounded hover:bg-emerald-700 disabled:opacity-60 disabled:cursor-not-allowed"
+                          >
+                            {isApproving ? "..." : "Approve"}
+                          </button>
+                          <button
+                            onClick={() => {
+                              void handleDenyRequest(request.id);
+                            }}
+                            disabled={isDenying || isApproving}
+                            className="flex-1 px-2 py-1 text-xs bg-red-600 text-white rounded hover:bg-red-700 disabled:opacity-60 disabled:cursor-not-allowed"
+                          >
+                            {isDenying ? "..." : "Deny"}
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+              <button
+                onClick={() => {
+                  void loadPendingRequests();
+                }}
+                disabled={isLoadingPendingRequests}
+                className="w-full px-3 py-1.5 text-xs bg-slate-200 text-slate-700 rounded-b hover:bg-slate-300 disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                {isLoadingPendingRequests ? "Refreshing..." : "Refresh"}
+              </button>
+            </>
+          ) : null}
+        </div>
       ) : null}
 
       {showConnectionForm ? (
