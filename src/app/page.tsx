@@ -73,10 +73,11 @@ type InsertError = {
 } | null;
 
 const RELATION_TABLE_CANDIDATES = ["links", "connections", "edges"] as const;
-const RELATIONSHIP_OPTIONS = ["friends", "exes", "lovers", "enemies", "family"] as const;
+const RELATIONSHIP_OPTIONS = ["friends", "coworkers", "exes", "lovers", "enemies", "family"] as const;
 type RelationshipType = (typeof RELATIONSHIP_OPTIONS)[number];
 const RELATIONSHIP_COLORS: Record<RelationshipType, string> = {
   friends: "#22c55e",
+  coworkers: "#6b7280",
   exes: "#000000",
   lovers: "#ec4899",
   enemies: "#ef4444",
@@ -116,6 +117,7 @@ export default function NetworkGraph() {
   const [isSigningIn, setIsSigningIn] = useState(false);
   const [hasMounted, setHasMounted] = useState(false);
   const [includeFriendships, setIncludeFriendships] = useState(true);
+  const [includeCoworkers, setIncludeCoworkers] = useState(true);
   const [includeExes, setIncludeExes] = useState(true);
   const [includeEnemies, setIncludeEnemies] = useState(true);
   const [includeLovers, setIncludeLovers] = useState(true);
@@ -208,6 +210,8 @@ export default function NetworkGraph() {
     switch (normalizedType) {
       case "friends":
         return includeFriendships;
+      case "coworkers":
+        return includeCoworkers;
       case "enemies":
         return includeEnemies;
       case "lovers":
@@ -226,7 +230,16 @@ export default function NetworkGraph() {
       nodes: graphData.nodes,
       links: graphData.links.filter((link) => isRelationshipVisible(String(link.type))),
     }),
-    [graphData.nodes, graphData.links, includeFriendships, includeEnemies, includeExes, includeLovers, includeFamily]
+    [
+      graphData.nodes,
+      graphData.links,
+      includeFriendships,
+      includeCoworkers,
+      includeEnemies,
+      includeExes,
+      includeLovers,
+      includeFamily,
+    ]
   );
 
   const fetchLinksFromAvailableTable = useCallback(async () => {
@@ -1629,6 +1642,16 @@ export default function NetworkGraph() {
               className="h-4 w-4"
             />
             Include friendships
+          </label>
+          <label className="flex items-center gap-2 text-sm text-slate-700">
+            <input
+              id="include-coworkers"
+              type="checkbox"
+              checked={includeCoworkers}
+              onChange={(event) => setIncludeCoworkers(event.target.checked)}
+              className="h-4 w-4"
+            />
+            Include coworkers
           </label>
           <label className="flex items-center gap-2 text-sm text-slate-700">
             <input
