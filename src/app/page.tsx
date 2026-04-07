@@ -186,6 +186,7 @@ export default function NetworkGraph() {
   const [plannedEvents, setPlannedEvents] = useState<PlannedEvent[]>([]);
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [isLoadingEvents, setIsLoadingEvents] = useState(false);
+  const [editingEventId, setEditingEventId] = useState<string | null>(null);
   const [eventDraftName, setEventDraftName] = useState("");
   const [eventAttendeeQuery, setEventAttendeeQuery] = useState("");
   const [eventDraftAttendees, setEventDraftAttendees] = useState<EventAttendee[]>([]);
@@ -666,6 +667,10 @@ export default function NetworkGraph() {
 
   const handleCreateEvent = async () => {
     const eventName = eventDraftName.trim();
+    const isEditingEvent = editingEventId !== null;
+    const existingEvent = isEditingEvent
+      ? plannedEvents.find((entry) => entry.id === editingEventId)
+      : null;
 
     if (!eventName) {
       setEventError("Give the event a name.");
@@ -677,17 +682,17 @@ export default function NetworkGraph() {
       return;
     }
 
-    const event: PlannedEvent = {
-      id: crypto.randomUUID(),
-      name: eventName,
-      attendees: eventDraftAttendees,
-      createdAt: new Date().toISOString(),
-    };
-
     if (!currentUserId) {
       setEventError("You must be signed in before creating events.");
       return;
     }
+
+    const event: PlannedEvent = {
+      id: isEditingEvent ? String(editingEventId) : crypto.randomUUID(),
+      name: eventName,
+      attendees: eventDraftAttendees,
+      createdAt: existingEvent?.createdAt ?? new Date().toISOString(),
+    };
 
     setIsLoadingEvents(true);
     setEventError(null);
@@ -695,6 +700,47 @@ export default function NetworkGraph() {
     let savedRemotely = false;
 
     for (const table of EVENT_TABLE_CANDIDATES) {
+      if (isEditingEvent) {
+        const updateResult = await supabase
+          .from(table)
+          .update({
+            name: event.name,
+            attendees: event.attendees,
+          })
+          .eq("id", event.id)
+          .eq("user_id", currentUserId);
+
+        if (updateResult.error) {
+          if (hasMissingTableError(updateResult.error.message, table)) {
+            continue;
+          }
+
+          if (hasMissingColumnError(updateResult.error.message, "attendees")) {
+            const retryResult = await supabase
+              .from(table)
+              .update({ name: event.name })
+              .eq("id", event.id)
+              .eq("user_id", currentUserId);
+
+            if (retryResult.error) {
+              setEventError(retryResult.error.message);
+              setIsLoadingEvents(false);
+              return;
+            }
+
+            savedRemotely = true;
+            break;
+          }
+
+          setEventError(updateResult.error.message);
+          setIsLoadingEvents(false);
+          return;
+        }
+
+        savedRemotely = true;
+        break;
+      }
+
       const insertResult = await supabase.from(table).insert({
         id: event.id,
         user_id: currentUserId,
@@ -736,7 +782,10 @@ export default function NetworkGraph() {
     }
 
     if (!savedRemotely) {
-      const nextEvents = [event, ...plannedEvents];
+      const nextEvents = isEditingEvent
+        ? plannedEvents.map((entry) => (entry.id === event.id ? event : entry))
+        : [event, ...plannedEvents];
+
       savePlannedEventsToLocalStorage(nextEvents);
       setPlannedEvents(nextEvents);
       setSelectedEventId(event.id);
@@ -744,8 +793,11 @@ export default function NetworkGraph() {
       setEventDraftName("");
       setEventAttendeeQuery("");
       setEventDraftAttendees([]);
+      setEditingEventId(null);
       setEventError(
-        "Create a planned_events table in Supabase to store account-specific events across devices."
+        isEditingEvent
+          ? "Updated locally in this browser. Create a planned_events table in Supabase to sync edits across devices."
+          : "Create a planned_events table in Supabase to store account-specific events across devices."
       );
       setIsLoadingEvents(false);
       return;
@@ -757,6 +809,7 @@ export default function NetworkGraph() {
     setEventDraftName("");
     setEventAttendeeQuery("");
     setEventDraftAttendees([]);
+    setEditingEventId(null);
     setEventError(null);
     setIsLoadingEvents(false);
   };
@@ -764,6 +817,100 @@ export default function NetworkGraph() {
   const handleSelectEvent = (eventId: string) => {
     setSelectedEventId(eventId);
     setSidebarTab("events");
+  };
+
+  const handleDeleteEvent = async (eventId: string) => {
+    if (!currentUserId) {
+      setEventError("You must be signed in before deleting events.");
+      return;
+    }
+
+    const event = plannedEvents.find((entry) => entry.id === eventId);
+    if (!event) {
+      setEventError("Unable to find the selected event.");
+      return;
+    }
+
+    const confirmed = window.confirm(`Delete event "${event.name}"?`);
+    if (!confirmed) {
+      return;
+    }
+
+    setIsLoadingEvents(true);
+    setEventError(null);
+
+    let deletedRemotely = false;
+
+    for (const table of EVENT_TABLE_CANDIDATES) {
+      const deleteResult = await supabase
+        .from(table)
+        .delete()
+        .eq("id", eventId)
+        .eq("user_id", currentUserId);
+
+      if (deleteResult.error) {
+        if (hasMissingTableError(deleteResult.error.message, table)) {
+          continue;
+        }
+
+        setEventError(deleteResult.error.message);
+        setIsLoadingEvents(false);
+        return;
+      }
+
+      deletedRemotely = true;
+      break;
+    }
+
+    const nextEvents = plannedEvents.filter((entry) => entry.id !== eventId);
+    savePlannedEventsToLocalStorage(nextEvents);
+    setPlannedEvents(nextEvents);
+
+    if (selectedEventId === eventId) {
+      setSelectedEventId(null);
+    }
+
+    if (editingEventId === eventId) {
+      setEditingEventId(null);
+      setEventDraftName("");
+      setEventAttendeeQuery("");
+      setEventDraftAttendees([]);
+      setEventError(null);
+    }
+
+    if (!deletedRemotely) {
+      setEventError(
+        "Deleted locally in this browser. Add a planned_events table in Supabase to sync deletions across devices."
+      );
+      setIsLoadingEvents(false);
+      return;
+    }
+
+    setIsLoadingEvents(false);
+  };
+
+  const handleBeginEditEvent = (eventId: string) => {
+    const event = plannedEvents.find((entry) => entry.id === eventId);
+    if (!event) {
+      setEventError("Unable to find the selected event.");
+      return;
+    }
+
+    setEditingEventId(event.id);
+    setSelectedEventId(event.id);
+    setSidebarTab("events");
+    setEventDraftName(event.name);
+    setEventAttendeeQuery("");
+    setEventDraftAttendees(event.attendees);
+    setEventError(null);
+  };
+
+  const handleCancelEventEdit = () => {
+    setEditingEventId(null);
+    setEventDraftName("");
+    setEventAttendeeQuery("");
+    setEventDraftAttendees([]);
+    setEventError(null);
   };
 
   const handleClearSelectedEvent = () => {
@@ -1029,6 +1176,7 @@ export default function NetworkGraph() {
     setPendingRequests([]);
     setPlannedEvents([]);
     setSelectedEventId(null);
+    setEditingEventId(null);
     setEventDraftName("");
     setEventAttendeeQuery("");
     setEventDraftAttendees([]);
@@ -2562,6 +2710,27 @@ export default function NetworkGraph() {
                 ) : (
                   <div className="flex flex-1 flex-col overflow-hidden">
                     <div className="border-b border-slate-200 p-3 space-y-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <div>
+                          <p className="text-xs font-semibold uppercase text-slate-500">
+                            {editingEventId ? "Edit event" : "Create event"}
+                          </p>
+                          <p className="text-sm text-slate-700">
+                            {editingEventId
+                              ? "Update the event name and attendee list."
+                              : "Create a new saved event and choose attendees."}
+                          </p>
+                        </div>
+                        {editingEventId ? (
+                          <button
+                            onClick={handleCancelEventEdit}
+                            className="rounded bg-slate-100 px-3 py-2 text-xs text-slate-700 hover:bg-slate-200"
+                          >
+                            Cancel edit
+                          </button>
+                        ) : null}
+                      </div>
+
                       <div className="space-y-1">
                         <label className="text-sm font-medium text-slate-700">Event name</label>
                         <input
@@ -2643,7 +2812,11 @@ export default function NetworkGraph() {
                         disabled={isLoadingEvents}
                         className="w-full rounded bg-violet-600 px-4 py-2 text-sm text-white hover:bg-violet-700"
                       >
-                        {isLoadingEvents ? "Saving..." : "Create Event"}
+                        {isLoadingEvents
+                          ? "Saving..."
+                          : editingEventId
+                            ? "Save Changes"
+                            : "Create Event"}
                       </button>
                     </div>
 
@@ -2671,23 +2844,52 @@ export default function NetworkGraph() {
                             const customCount = event.attendees.filter((attendee) => !attendee.existingNodeId).length;
 
                             return (
-                              <button
+                              <div
                                 key={event.id}
-                                onClick={() => handleSelectEvent(event.id)}
                                 className={`w-full rounded border px-3 py-2 text-left transition ${
                                   isSelected
                                     ? "border-violet-500 bg-violet-50"
                                     : "border-slate-200 bg-white hover:bg-slate-50"
                                 }`}
                               >
-                                <div className="flex items-center justify-between gap-2">
-                                  <span className="text-sm font-medium text-slate-800">{event.name}</span>
-                                  <span className="text-xs text-slate-500">{event.attendees.length} people</span>
+                                <button
+                                  type="button"
+                                  onClick={() => handleSelectEvent(event.id)}
+                                  className="w-full text-left"
+                                >
+                                  <div className="flex items-center justify-between gap-2">
+                                    <span className="text-sm font-medium text-slate-800">{event.name}</span>
+                                    <span className="text-xs text-slate-500">{event.attendees.length} people</span>
+                                  </div>
+                                  <p className="mt-1 text-xs text-slate-500">
+                                    {customCount > 0
+                                      ? `${customCount} custom attendee${customCount === 1 ? "" : "s"}`
+                                      : "All attendees exist in the network"}
+                                  </p>
+                                </button>
+
+                                <div className="mt-2 flex items-center gap-2">
+                                  <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] uppercase tracking-wide text-slate-500">
+                                    {isSelected ? "Selected" : "Saved"}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleBeginEditEvent(event.id)}
+                                    className="rounded bg-violet-50 px-2 py-1 text-xs text-violet-700 hover:bg-violet-100"
+                                  >
+                                    Edit
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      void handleDeleteEvent(event.id);
+                                    }}
+                                    className="rounded bg-red-50 px-2 py-1 text-xs text-red-700 hover:bg-red-100"
+                                  >
+                                    Delete
+                                  </button>
                                 </div>
-                                <p className="mt-1 text-xs text-slate-500">
-                                  {customCount > 0 ? `${customCount} custom attendee${customCount === 1 ? "" : "s"}` : "All attendees exist in the network"}
-                                </p>
-                              </button>
+                              </div>
                             );
                           })}
                         </div>
