@@ -1,6 +1,6 @@
 # Interaction Network
 
-Interaction Network is a Next.js app for mapping social relationships between people, exploring graph structure visually, and asking an AI assistant questions about the network.
+Interaction Network is a Next.js app for mapping social relationships between people, exploring graph structure visually, planning events, and asking an AI assistant questions about the network.
 
 ## What it does
 
@@ -10,9 +10,38 @@ Interaction Network is a Next.js app for mapping social relationships between pe
 - Lets signed-in users add/edit/delete nodes and connections.
 - Includes relationship visibility toggles (include/exclude by edge type).
 - Includes a Disperse layout mode with automatic zoom-to-fit.
-- Provides a Gemini-powered “Social Dynamics Agent” sidebar with example prompts.
+- Provides a shared **Planning Hub** sidebar with:
+	- **Gemini** chat tab (example prompts, markdown-style bold/newline rendering)
+	- **Events** tab (create, edit, delete, and select saved events)
 - Supports sign-in plus account request submission and admin approval/deny workflow.
-- Includes an Events planner sidebar tab for creating events, adding attendees, and viewing attendee-only subgraphs.
+- Includes event-only graph views that show attendees plus existing connections between them.
+- Supports agent-triggered event creation from natural-language prompts with a confirmation modal (`Create` / `Cancel`).
+- Supports optional post-create “who else should I add?” attendee suggestions.
+
+## Planning Hub behavior
+
+### Gemini tab
+
+- Regular chat with graph-aware Gemini answers.
+- Accepts prompts like:
+	- `show me what a dinner party would look like with alice, bob, and catie`
+- For event-intent prompts, the app opens a confirmation modal before creating the event.
+- If your prompt includes follow-up language like `who else could I add`, the app auto-requests additional attendee suggestions after event creation.
+
+### Events tab
+
+- Create named events and attendee lists.
+- Add attendees from existing network nodes (auto-add from dropdown selection).
+- Add custom attendees not in the main graph.
+- Edit saved events.
+- Delete saved events.
+- Select an event to switch graph view to attendees + existing links among those attendees.
+
+## Data ownership
+
+- Events are account-scoped by `user_id`.
+- Signed-in users only see their own events.
+- Recommended: enforce this with Supabase Row Level Security (RLS).
 
 ## Tech stack
 
@@ -78,6 +107,7 @@ Notes:
 - Admin approval sends Supabase invite emails via service role key.
 - Event rows should include `user_id`, `name`, `attendees` (JSON), and `created_at`.
 - Use row-level security so users can only read/write events where `user_id = auth.uid()`.
+- If `planned_events`/`events` is missing, the app falls back to browser-local storage for events.
 
 ## Authentication and invite flow
 
@@ -85,6 +115,12 @@ Notes:
 - Approved requests send invite emails.
 - Invite links redirect to the app callback page at `/auth/callback`.
 - Configure Supabase Auth URL settings to allow your production and local callback URLs.
+
+## Suggested prompt examples
+
+- `Show me what a dinner party would look like with allison, carter, julia II, kaaj, and catie.`
+- `Plan a birthday event with alice, bob, and david.`
+- `Create a team offsite with maya, rina, and tom. Who else could I add to increase social connection?`
 
 ## Scripts
 
