@@ -150,6 +150,7 @@ const EXAMPLE_PROMPTS = [
   "Map out distinct friend groups and clusters.",
   "Who bridges different groups or communities?",
   "Find relationships that have conflicting dynamics (e.g., friend with an enemy).",
+  "I'm going on a backpacking trip and so far Alice, Bob, and Catie are going.",
   "Suggest an event guest list that would minimize relationship tension.",
 ];
 
@@ -1772,34 +1773,55 @@ export default function NetworkGraph() {
     const normalized = question.replace(/\s+/g, " ").trim();
     const lower = normalized.toLowerCase();
 
-    if (!lower.includes(" with ")) {
-      return null;
-    }
-
-    const eventIntentMarkers = ["show me", "create", "make", "plan", "event", "party", "dinner"];
+    const eventIntentMarkers = [
+      "show me",
+      "create",
+      "make",
+      "plan",
+      "event",
+      "party",
+      "dinner",
+      "trip",
+      "going on",
+      "so far",
+    ];
     const hasIntentMarker = eventIntentMarkers.some((marker) => lower.includes(marker));
     if (!hasIntentMarker) {
       return null;
     }
 
-    const withIndex = lower.lastIndexOf(" with ");
-    if (withIndex === -1) {
-      return null;
-    }
+    let eventNamePart = "";
+    let attendeePart = "";
 
-    let eventNamePart = normalized.slice(0, withIndex).trim();
-    const attendeePartRaw = normalized.slice(withIndex + 6).trim();
-    const attendeePart = attendeePartRaw.split(/[.?!]/)[0]?.trim() ?? "";
+    const soFarMatch = normalized.match(/^(.*?)(?:,?\s*)so far\s+(.+?)\s+(?:is|are)\s+going/i);
+    if (soFarMatch) {
+      eventNamePart = soFarMatch[1]?.trim() ?? "";
+      attendeePart = soFarMatch[2]?.trim() ?? "";
+    } else {
+      const withIndex = lower.lastIndexOf(" with ");
+      if (withIndex === -1) {
+        return null;
+      }
+
+      eventNamePart = normalized.slice(0, withIndex).trim();
+      const attendeePartRaw = normalized.slice(withIndex + 6).trim();
+      attendeePart = attendeePartRaw.split(/[.?!]/)[0]?.trim() ?? "";
+    }
 
     eventNamePart = eventNamePart
       .replace(/^show me( what)?( a| an)?\s+/i, "")
       .replace(/^create( me)?( a| an)?\s+/i, "")
       .replace(/^make( me)?( a| an)?\s+/i, "")
       .replace(/^plan( me)?( a| an)?\s+/i, "")
+      .replace(/^i am going on( a| an)?\s+/i, "")
+      .replace(/^i'?m going on( a| an)?\s+/i, "")
+      .replace(/^we are going on( a| an)?\s+/i, "")
+      .replace(/^we'?re going on( a| an)?\s+/i, "")
       .replace(/^i am planning( a| an)?\s+/i, "")
       .replace(/^i'?m planning( a| an)?\s+/i, "")
       .replace(/^we are planning( a| an)?\s+/i, "")
       .replace(/^we'?re planning( a| an)?\s+/i, "")
+      .replace(/\s+and$/i, "")
       .replace(/\s+(would look like|looks like|look like)$/i, "")
       .replace(/\s+event$/i, "")
       .trim();

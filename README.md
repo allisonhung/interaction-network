@@ -120,6 +120,7 @@ Notes:
 
 - `Show me what a dinner party would look like with allison, carter, julia II, kaaj, and catie.`
 - `Plan a birthday event with alice, bob, and david.`
+- `I’m going on a backpacking trip and so far allison, carter, julia II, kaaj, and catie are going.`
 - `Create a team offsite with maya, rina, and tom. Who else could I add to increase social connection?`
 
 ## Scripts
