@@ -13,6 +13,10 @@ type GraphLink = {
 
 type RequestBody = {
   question?: string;
+  messageHistory?: Array<{
+    role?: "user" | "assistant";
+    text?: string;
+  }>;
   graphData?: {
     nodes?: GraphNode[];
     links?: GraphLink[];
@@ -37,6 +41,13 @@ export async function POST(request: Request) {
   }
 
   const question = body.question?.trim();
+  const messageHistory = (body.messageHistory ?? [])
+    .filter((message) => (message.text ?? "").trim().length > 0)
+    .slice(-10)
+    .map((message) => ({
+      role: message.role === "assistant" ? "assistant" : "user",
+      text: (message.text ?? "").trim(),
+    }));
   const nodes = body.graphData?.nodes ?? [];
   const links = body.graphData?.links ?? [];
 
@@ -61,7 +72,14 @@ export async function POST(request: Request) {
     "For party-invite questions, prefer sets that avoid enemies being together while maximizing friendly compatibility.";
 
   const userPrompt = [
-    `Question: ${question}`,
+    messageHistory.length > 0
+      ? [
+          "Recent conversation:",
+          ...messageHistory.map((message) => `${message.role}: ${message.text}`),
+          "",
+          `Latest question: ${question}`,
+        ].join("\n")
+      : `Question: ${question}`,
     "",
     "Graph JSON:",
     JSON.stringify(compactGraph),

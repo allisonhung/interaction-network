@@ -2111,10 +2111,16 @@ export default function NetworkGraph() {
     }
 
     try {
+      const recentHistory = [...agentMessages, { role: "user", text: question }].slice(-10);
+
       const response = await fetch("/api/social-agent", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question, graphData }),
+        body: JSON.stringify({
+          question,
+          graphData,
+          messageHistory: recentHistory,
+        }),
       });
 
       if (!response.ok) {
