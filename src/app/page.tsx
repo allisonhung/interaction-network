@@ -3081,8 +3081,55 @@ export default function NetworkGraph() {
     setPendingEventConfirmationError(null);
   };
 
-  const suggestAdditionalAttendees = async (eventName: string, attendeeNames: string[]) => {
+  const getAdditionalSuggestionBounds = (sourceQuestion: string, currentAttendeeCount: number) => {
+    const normalized = sourceQuestion.replace(/[–—]/g, "-");
+    const rangeMatch = normalized.match(
+      /(\d+)\s*(?:-|to)\s*(\d+)\s*(?:people|person|attendees|guests)\b/i
+    );
+
+    if (rangeMatch) {
+      const minTotal = Number(rangeMatch[1]);
+      const maxTotal = Number(rangeMatch[2]);
+
+      if (Number.isFinite(minTotal) && Number.isFinite(maxTotal) && maxTotal >= minTotal) {
+        const minAdditional = Math.max(1, minTotal - currentAttendeeCount);
+        const maxAdditional = Math.max(minAdditional, maxTotal - currentAttendeeCount);
+        return {
+          minAdditional,
+          maxAdditional: Math.min(5, maxAdditional),
+        };
+      }
+    }
+
+    const singleMatch = normalized.match(/(\d+)\s*(?:people|person|attendees|guests)\b/i);
+    if (singleMatch) {
+      const targetTotal = Number(singleMatch[1]);
+      if (Number.isFinite(targetTotal) && targetTotal > 0) {
+        const additional = Math.max(1, targetTotal - currentAttendeeCount);
+        return {
+          minAdditional: Math.min(5, additional),
+          maxAdditional: Math.min(5, additional),
+        };
+      }
+    }
+
+    return null;
+  };
+
+  const suggestAdditionalAttendees = async (
+    eventName: string,
+    attendeeNames: string[],
+    sourceQuestion?: string
+  ) => {
     const normalizedCurrentNames = new Set(attendeeNames.map((name) => normalizePersonName(name)));
+    const suggestionBounds = sourceQuestion
+      ? getAdditionalSuggestionBounds(sourceQuestion, attendeeNames.length)
+      : null;
+    const requestedCountInstruction = suggestionBounds
+      ? suggestionBounds.minAdditional === suggestionBounds.maxAdditional
+        ? `Suggest exactly ${suggestionBounds.maxAdditional} names`
+        : `Suggest ${suggestionBounds.minAdditional}-${suggestionBounds.maxAdditional} names`
+      : "Suggest up to 5 names";
 
     try {
       const response = await fetch("/api/social-agent", {
@@ -3090,9 +3137,12 @@ export default function NetworkGraph() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           question:
+            (sourceQuestion
+              ? `Original user question: "${sourceQuestion}". `
+              : "") +
             `I am planning an event called "${eventName}" with these attendees: ${attendeeNames.join(", ")}. ` +
             "Who else could I add to increase social connection? " +
-            "Suggest up to 5 names from the existing graph only, excluding current attendees. " +
+            `${requestedCountInstruction} from the existing graph only, excluding current attendees. ` +
             "Use short bullet points with a one-line reason each.",
           graphData,
         }),
@@ -3158,7 +3208,7 @@ export default function NetworkGraph() {
       }))
       .filter((entry) => entry.score > 0)
       .sort((a, b) => b.score - a.score)
-      .slice(0, 5);
+      .slice(0, suggestionBounds?.maxAdditional ?? 5);
 
     if (ranked.length === 0) {
       return "I couldn't find strong additional candidates from the current graph without introducing likely conflicts.";
@@ -3191,7 +3241,7 @@ export default function NetworkGraph() {
       return;
     }
 
-    const { shouldSuggestMore } = pendingEventConfirmation;
+    const { shouldSuggestMore, sourceQuestion } = pendingEventConfirmation;
     setPendingEventConfirmation(null);
     setPendingEventDraftName("");
     setPendingEventDraftAttendees([]);
@@ -3202,7 +3252,7 @@ export default function NetworkGraph() {
     setAgentMessages((current) => [...current, { role: "assistant", text: intentResult }]);
 
     if (shouldSuggestMore && intentResult.toLowerCase().startsWith("created event")) {
-      const suggestions = await suggestAdditionalAttendees(eventName, attendeeNames);
+      const suggestions = await suggestAdditionalAttendees(eventName, attendeeNames, sourceQuestion);
       setAgentMessages((current) => [...current, { role: "assistant", text: suggestions }]);
     }
   };
@@ -3255,7 +3305,9 @@ export default function NetworkGraph() {
 
     if (eventIntent) {
       const shouldSuggestMore =
-        /who else|anyone else|who should .*add|could i add|what else should/i.test(question);
+        /who else|anyone else|who should .*add|could i add|what else should|who else should go|who should go|who else should come|who should come/i.test(
+          question
+        );
 
       setPendingEventConfirmation({
         eventName: eventIntent.eventName,
