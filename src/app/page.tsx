@@ -197,6 +197,7 @@ export default function NetworkGraph() {
   const [groupMembershipTable, setGroupMembershipTable] = useState<string | null>(null);
   const [groupError, setGroupError] = useState<string | null>(null);
   const [showCreateGroupForm, setShowCreateGroupForm] = useState(false);
+  const [showEditGroupForm, setShowEditGroupForm] = useState(false);
   const [newGroupName, setNewGroupName] = useState("");
   const [newGroupSelectedNodeIds, setNewGroupSelectedNodeIds] = useState<string[]>([]);
   const [createGroupError, setCreateGroupError] = useState<string | null>(null);
@@ -1563,6 +1564,7 @@ export default function NetworkGraph() {
     setGroupMembershipTable(null);
     setGroupError(null);
     setShowCreateGroupForm(false);
+    setShowEditGroupForm(false);
     setNewGroupName("");
     setNewGroupSelectedNodeIds([]);
     setCreateGroupError(null);
@@ -1589,6 +1591,33 @@ export default function NetworkGraph() {
     setNewGroupName("");
     setNewGroupSelectedNodeIds([]);
     setShowCreateGroupForm(true);
+  };
+
+  const handleOpenEditGroupForm = () => {
+    if (!currentUserId) {
+      setError("You must be signed in before editing groups.");
+      return;
+    }
+
+    if (!selectedGroupId) {
+      setCreateGroupError("Choose a group to edit.");
+      return;
+    }
+
+    const targetGroup = groups.find((group) => group.id === selectedGroupId);
+    if (!targetGroup) {
+      setCreateGroupError("Unable to find the selected group.");
+      return;
+    }
+
+    const selectedNodeIds = graphData.nodes
+      .filter((node) => (nodeGroupIdsByNodeId[node.id] ?? []).includes(targetGroup.id))
+      .map((node) => node.id);
+
+    setNewGroupName(targetGroup.name);
+    setNewGroupSelectedNodeIds(selectedNodeIds);
+    setCreateGroupError(null);
+    setShowEditGroupForm(true);
   };
 
   const handleCreateGroup = async () => {
@@ -1745,6 +1774,160 @@ export default function NetworkGraph() {
     setShowCreateGroupForm(false);
     setNewGroupName("");
     setNewGroupSelectedNodeIds([]);
+    setCreateGroupError(null);
+    setIsSaving(false);
+  };
+
+  const handleEditGroup = async () => {
+    if (!currentUserId) {
+      setCreateGroupError("You must be signed in before editing a group.");
+      return;
+    }
+
+    if (!selectedGroupId) {
+      setCreateGroupError("Choose a group to edit.");
+      return;
+    }
+
+    const existingGroup = groups.find((group) => group.id === selectedGroupId);
+    if (!existingGroup) {
+      setCreateGroupError("Unable to find the selected group.");
+      return;
+    }
+
+    const nextName = newGroupName.trim();
+    if (!nextName) {
+      setCreateGroupError("Enter a group name.");
+      return;
+    }
+
+    if (
+      groups.some(
+        (group) =>
+          group.id !== selectedGroupId &&
+          normalizeGroupName(group.name) === normalizeGroupName(nextName)
+      )
+    ) {
+      setCreateGroupError("A group with this name already exists.");
+      return;
+    }
+
+    setIsSaving(true);
+    setError(null);
+    setGroupError(null);
+    setCreateGroupError(null);
+
+    let persistenceFailed: string | null = null;
+
+    if (groupTable && groupMembershipTable) {
+      const updateResult = await supabase.from(groupTable).update({ name: nextName }).eq("id", selectedGroupId);
+
+      if (updateResult.error && hasMissingColumnError(updateResult.error.message, "name")) {
+        persistenceFailed = updateResult.error.message;
+      } else if (updateResult.error) {
+        persistenceFailed = updateResult.error.message;
+      }
+
+      if (!persistenceFailed) {
+        let deleteResult = await supabase
+          .from(groupMembershipTable)
+          .delete()
+          .eq("group_id", selectedGroupId);
+
+        if (deleteResult.error && hasMissingColumnError(deleteResult.error.message, "group_id")) {
+          deleteResult = await supabase
+            .from(groupMembershipTable)
+            .delete()
+            .eq("groupId", selectedGroupId);
+        }
+
+        if (deleteResult.error) {
+          persistenceFailed = deleteResult.error.message;
+        }
+      }
+
+      if (!persistenceFailed) {
+        for (const nodeId of newGroupSelectedNodeIds) {
+          const membershipPayloads = [
+            { node_id: nodeId, group_id: selectedGroupId, user_id: currentUserId },
+            { node_id: nodeId, group_id: selectedGroupId },
+            { nodeId, groupId: selectedGroupId, user_id: currentUserId },
+            { nodeId, groupId: selectedGroupId },
+          ];
+
+          let inserted = false;
+
+          for (const payload of membershipPayloads) {
+            const insertResult = await supabase.from(groupMembershipTable).insert(payload);
+
+            if (insertResult.error) {
+              if (
+                hasMissingColumnError(insertResult.error.message, "node_id") ||
+                hasMissingColumnError(insertResult.error.message, "group_id") ||
+                hasMissingColumnError(insertResult.error.message, "nodeId") ||
+                hasMissingColumnError(insertResult.error.message, "groupId") ||
+                hasMissingColumnError(insertResult.error.message, "user_id")
+              ) {
+                continue;
+              }
+
+              persistenceFailed = insertResult.error.message;
+              break;
+            }
+
+            inserted = true;
+            break;
+          }
+
+          if (!inserted) {
+            if (!persistenceFailed) {
+              persistenceFailed = "Unable to update group memberships.";
+            }
+            break;
+          }
+        }
+      }
+    }
+
+    if (!persistenceFailed && groupTable && groupMembershipTable) {
+      await fetchGraphData(currentUserId);
+      setShowEditGroupForm(false);
+      setCreateGroupError(null);
+      setIsSaving(false);
+      return;
+    }
+
+    if (persistenceFailed) {
+      setGroupError(`${persistenceFailed} Using browser-local group storage for now.`);
+    }
+
+    const nextGroups = groups.map((group) =>
+      group.id === selectedGroupId
+        ? {
+            ...group,
+            name: nextName,
+          }
+        : group
+    );
+
+    const nextNodeGroupIdsByNodeId: Record<string, string[]> = {};
+
+    for (const node of graphData.nodes) {
+      const existingMemberships = nodeGroupIdsByNodeId[node.id] ?? [];
+      nextNodeGroupIdsByNodeId[node.id] = existingMemberships.filter((groupId) => groupId !== selectedGroupId);
+    }
+
+    for (const nodeId of newGroupSelectedNodeIds) {
+      const existingMemberships = nextNodeGroupIdsByNodeId[nodeId] ?? [];
+      nextNodeGroupIdsByNodeId[nodeId] = existingMemberships.includes(selectedGroupId)
+        ? existingMemberships
+        : [...existingMemberships, selectedGroupId];
+    }
+
+    setGroups(nextGroups);
+    setNodeGroupIdsByNodeId(nextNodeGroupIdsByNodeId);
+    saveGroupsToLocalStorage(nextGroups, nextNodeGroupIdsByNodeId);
+    setShowEditGroupForm(false);
     setCreateGroupError(null);
     setIsSaving(false);
   };
@@ -3509,6 +3692,15 @@ export default function NetworkGraph() {
           >
             + Add Group
           </button>
+
+          <button
+            type="button"
+            onClick={handleOpenEditGroupForm}
+            disabled={!currentUserId || !selectedGroupId || isSaving}
+            className="rounded bg-slate-700 px-3 py-1.5 text-sm text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            Edit Group
+          </button>
         </div>
       </section>
 
@@ -3626,6 +3818,101 @@ export default function NetworkGraph() {
                 className="px-4 py-2 bg-violet-600 text-white rounded hover:bg-violet-700 disabled:opacity-60 disabled:cursor-not-allowed"
               >
                 {isSaving ? "Saving..." : "Create Group"}
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {showEditGroupForm ? (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/35 p-4">
+          <section className="w-full max-w-xl rounded-lg border border-slate-200 bg-white shadow-xl">
+            <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+              <h3 className="text-base font-semibold text-slate-800">Edit Group</h3>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowEditGroupForm(false);
+                  setCreateGroupError(null);
+                }}
+                className="rounded px-2 py-1 text-slate-500 hover:bg-slate-100 hover:text-slate-700"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-3 p-4">
+              <div className="space-y-1">
+                <label className="text-sm font-medium text-slate-700">Group name</label>
+                <input
+                  value={newGroupName}
+                  onChange={(event) => setNewGroupName(event.target.value)}
+                  placeholder="coffee"
+                  className="w-full rounded border border-slate-300 px-3 py-2 text-sm"
+                />
+              </div>
+
+              <div className="flex items-center justify-between">
+                <p className="text-sm font-medium text-slate-700">People</p>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setNewGroupSelectedNodeIds(graphData.nodes.map((node) => node.id))}
+                    className="rounded bg-slate-100 px-2 py-1 text-xs text-slate-700 hover:bg-slate-200"
+                  >
+                    Select all
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setNewGroupSelectedNodeIds([])}
+                    className="rounded bg-slate-100 px-2 py-1 text-xs text-slate-700 hover:bg-slate-200"
+                  >
+                    Clear
+                  </button>
+                </div>
+              </div>
+
+              <div className="max-h-64 space-y-2 overflow-y-auto rounded border border-slate-200 bg-slate-50 p-3">
+                {graphData.nodes.length === 0 ? (
+                  <p className="text-sm text-slate-500">No people available yet.</p>
+                ) : (
+                  graphData.nodes.map((node) => (
+                    <label key={node.id} className="flex items-center gap-2 text-sm text-slate-700">
+                      <input
+                        type="checkbox"
+                        checked={newGroupSelectedNodeIds.includes(node.id)}
+                        onChange={() => handleToggleCreateGroupNode(node.id)}
+                        className="h-4 w-4"
+                      />
+                      {node.name}
+                    </label>
+                  ))
+                )}
+              </div>
+
+              {createGroupError ? <p className="text-sm text-red-600">{createGroupError}</p> : null}
+            </div>
+
+            <div className="flex items-center justify-end gap-2 border-t border-slate-200 px-4 py-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowEditGroupForm(false);
+                  setCreateGroupError(null);
+                }}
+                className="px-4 py-2 bg-slate-100 text-slate-700 rounded hover:bg-slate-200"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  void handleEditGroup();
+                }}
+                disabled={isSaving}
+                className="px-4 py-2 bg-violet-600 text-white rounded hover:bg-violet-700 disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                {isSaving ? "Saving..." : "Save Group"}
               </button>
             </div>
           </section>
