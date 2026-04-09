@@ -228,7 +228,7 @@ export default function NetworkGraph() {
   const [isLoadingPendingRequests, setIsLoadingPendingRequests] = useState(false);
   const [isApprovingRequestId, setIsApprovingRequestId] = useState<string | null>(null);
   const [isDenyingRequestId, setIsDenyingRequestId] = useState<string | null>(null);
-  const [isApprovalsMinimized, setIsApprovalsMinimized] = useState(false);
+  const [isApprovalsMinimized, setIsApprovalsMinimized] = useState(true);
   const [sidebarTab, setSidebarTab] = useState<"agent" | "events">("agent");
   const [isSidebarMinimized, setIsSidebarMinimized] = useState(false);
   const [plannedEvents, setPlannedEvents] = useState<PlannedEvent[]>([]);
@@ -1627,7 +1627,7 @@ export default function NetworkGraph() {
     setNewGroupName("");
     setNewGroupSelectedNodeIds([]);
     setCreateGroupError(null);
-    setIsApprovalsMinimized(false);
+    setIsApprovalsMinimized(true);
     setIsSidebarMinimized(false);
     setIsSigningIn(false);
   };
