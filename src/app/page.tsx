@@ -3686,23 +3686,6 @@ export default function NetworkGraph() {
             </select>
           </label>
 
-          <label className="flex items-center gap-2 text-sm text-slate-700">
-            Group
-            <select
-              value={selectedGroupId}
-              onChange={(event) => setSelectedGroupId(event.target.value)}
-              className="rounded border border-slate-300 px-2 py-1 text-sm"
-              disabled={groups.length === 0}
-            >
-              <option value="">{groups.length === 0 ? "No groups" : "Choose group"}</option>
-              {groups.map((group) => (
-                <option key={group.id} value={group.id}>
-                  {group.name}
-                </option>
-              ))}
-            </select>
-          </label>
-
           <button
             type="button"
             onClick={handleOpenCreateGroupForm}
@@ -3715,7 +3698,7 @@ export default function NetworkGraph() {
         </div>
       </section>
 
-      <section className="px-4 py-2 bg-white border-t border-slate-200 flex flex-wrap items-center gap-2">
+      <section className="px-4 py-2 border-0 bg-transparent flex flex-wrap items-center gap-2">
         {groupCounts.length === 0 ? (
           <p className="text-xs text-slate-500">No groups yet. Right-click a person and choose Edit Groups.</p>
         ) : (
@@ -3723,7 +3706,7 @@ export default function NetworkGraph() {
             <button
               key={group.id}
               type="button"
-              onClick={() => setSelectedGroupId(group.id)}
+              onClick={() => setSelectedGroupId((current) => (current === group.id ? "" : group.id))}
               onContextMenu={(event) => {
                 setSelectedGroupId(group.id);
                 openContextMenu(
@@ -3750,6 +3733,9 @@ export default function NetworkGraph() {
             </button>
           ))
         )}
+        {groupCounts.length > 0 ? (
+          <p className="text-xs text-slate-500">Click a group to select it. Click again to clear.</p>
+        ) : null}
         {groupError ? <p className="text-xs text-amber-700">{groupError}</p> : null}
       </section>
 
