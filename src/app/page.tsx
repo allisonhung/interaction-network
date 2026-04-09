@@ -4168,7 +4168,6 @@ export default function NetworkGraph() {
                   title="Add group"
                 >
                   <span aria-hidden>+</span>
-                  Add Group
                 </button>
               </div>
 
