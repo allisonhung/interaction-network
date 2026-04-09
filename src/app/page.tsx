@@ -237,6 +237,10 @@ export default function NetworkGraph() {
   const [editingEventId, setEditingEventId] = useState<string | null>(null);
   const [pendingEventConfirmation, setPendingEventConfirmation] =
     useState<PendingEventConfirmation | null>(null);
+  const [pendingEventDraftName, setPendingEventDraftName] = useState("");
+  const [pendingEventDraftAttendees, setPendingEventDraftAttendees] = useState<string[]>([]);
+  const [pendingEventAttendeeQuery, setPendingEventAttendeeQuery] = useState("");
+  const [pendingEventConfirmationError, setPendingEventConfirmationError] = useState<string | null>(null);
   const [eventDraftName, setEventDraftName] = useState("");
   const [eventAttendeeQuery, setEventAttendeeQuery] = useState("");
   const [eventDraftAttendees, setEventDraftAttendees] = useState<EventAttendee[]>([]);
@@ -2974,6 +2978,34 @@ export default function NetworkGraph() {
     return `Created event \"${event.name}\" with ${attendees.length} attendee${attendees.length === 1 ? "" : "s"}, and switched to Events view.`;
   };
 
+  const handleAddPendingEventAttendee = (attendeeNameInput?: string) => {
+    const attendeeName = (attendeeNameInput ?? pendingEventAttendeeQuery).trim();
+    if (!attendeeName) {
+      setPendingEventConfirmationError("Enter a name to add as an attendee.");
+      return;
+    }
+
+    const alreadyAdded = pendingEventDraftAttendees.some(
+      (existingName) => normalizePersonName(existingName) === normalizePersonName(attendeeName)
+    );
+
+    if (alreadyAdded) {
+      setPendingEventAttendeeQuery("");
+      return;
+    }
+
+    setPendingEventDraftAttendees((current) => [...current, attendeeName]);
+    setPendingEventAttendeeQuery("");
+    setPendingEventConfirmationError(null);
+  };
+
+  const handleRemovePendingEventAttendee = (attendeeName: string) => {
+    setPendingEventDraftAttendees((current) =>
+      current.filter((existingName) => normalizePersonName(existingName) !== normalizePersonName(attendeeName))
+    );
+    setPendingEventConfirmationError(null);
+  };
+
   const suggestAdditionalAttendees = async (eventName: string, attendeeNames: string[]) => {
     const normalizedCurrentNames = new Set(attendeeNames.map((name) => normalizePersonName(name)));
 
@@ -3071,8 +3103,25 @@ export default function NetworkGraph() {
       return;
     }
 
-    const { eventName, attendeeNames, shouldSuggestMore } = pendingEventConfirmation;
+    const eventName = pendingEventDraftName.trim();
+    const attendeeNames = pendingEventDraftAttendees.map((name) => name.trim()).filter(Boolean);
+
+    if (!eventName) {
+      setPendingEventConfirmationError("Give the event a name.");
+      return;
+    }
+
+    if (attendeeNames.length === 0) {
+      setPendingEventConfirmationError("Add at least one attendee.");
+      return;
+    }
+
+    const { shouldSuggestMore } = pendingEventConfirmation;
     setPendingEventConfirmation(null);
+    setPendingEventDraftName("");
+    setPendingEventDraftAttendees([]);
+    setPendingEventAttendeeQuery("");
+    setPendingEventConfirmationError(null);
 
     const intentResult = await createEventFromPromptIntent(eventName, attendeeNames);
     setAgentMessages((current) => [...current, { role: "assistant", text: intentResult }]);
@@ -3090,6 +3139,10 @@ export default function NetworkGraph() {
 
     const { eventName } = pendingEventConfirmation;
     setPendingEventConfirmation(null);
+    setPendingEventDraftName("");
+    setPendingEventDraftAttendees([]);
+    setPendingEventAttendeeQuery("");
+    setPendingEventConfirmationError(null);
     setAgentMessages((current) => [
       ...current,
       {
@@ -3126,6 +3179,10 @@ export default function NetworkGraph() {
         sourceQuestion: question,
         shouldSuggestMore,
       });
+      setPendingEventDraftName(eventIntent.eventName);
+      setPendingEventDraftAttendees(eventIntent.attendeeNames);
+      setPendingEventAttendeeQuery("");
+      setPendingEventConfirmationError(null);
 
       setAgentMessages((current) => [
         ...current,
@@ -4032,29 +4089,74 @@ export default function NetworkGraph() {
             <div className="border-b border-slate-200 px-4 py-3">
               <h3 className="text-base font-semibold text-slate-800">Confirm Event Creation</h3>
               <p className="text-sm text-slate-600">
-                The app is about to create this event from your agent prompt.
+                The app parsed this from your prompt. Edit anything before creating.
               </p>
             </div>
 
             <div className="space-y-3 p-4">
               <div>
-                <p className="text-xs font-semibold uppercase text-slate-500">Event Name</p>
-                <p className="text-sm text-slate-800">{pendingEventConfirmation.eventName}</p>
+                <label className="text-xs font-semibold uppercase text-slate-500">Event Name</label>
+                <input
+                  value={pendingEventDraftName}
+                  onChange={(event) => {
+                    setPendingEventDraftName(event.target.value);
+                    if (pendingEventConfirmationError) {
+                      setPendingEventConfirmationError(null);
+                    }
+                  }}
+                  placeholder="Event name"
+                  className="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm"
+                />
               </div>
 
               <div>
                 <p className="text-xs font-semibold uppercase text-slate-500">Attendees</p>
+                <div className="mt-2 flex items-center gap-2">
+                  <input
+                    list="pending-event-attendee-options"
+                    value={pendingEventAttendeeQuery}
+                    onChange={(event) => setPendingEventAttendeeQuery(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        handleAddPendingEventAttendee();
+                      }
+                    }}
+                    placeholder="Add attendee"
+                    className="w-full rounded border border-slate-300 px-3 py-2 text-sm"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => handleAddPendingEventAttendee()}
+                    className="rounded bg-slate-100 px-3 py-2 text-sm text-slate-700 hover:bg-slate-200"
+                  >
+                    Add
+                  </button>
+                </div>
                 <div className="mt-2 flex flex-wrap gap-2">
-                  {pendingEventConfirmation.attendeeNames.map((name) => (
-                    <span
+                  {pendingEventDraftAttendees.map((name) => (
+                    <button
                       key={name}
-                      className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs text-slate-700"
+                      type="button"
+                      onClick={() => handleRemovePendingEventAttendee(name)}
+                      className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs text-slate-700 hover:bg-slate-100"
+                      title="Remove attendee"
                     >
                       {name}
-                    </span>
+                      <span aria-hidden>×</span>
+                    </button>
                   ))}
                 </div>
+                <datalist id="pending-event-attendee-options">
+                  {graphData.nodes.map((node) => (
+                    <option key={`pending-event-node-${node.id}`} value={node.name} />
+                  ))}
+                </datalist>
               </div>
+
+              {pendingEventConfirmationError ? (
+                <p className="text-sm text-red-600">{pendingEventConfirmationError}</p>
+              ) : null}
             </div>
 
             <div className="flex items-center justify-end gap-2 border-t border-slate-200 px-4 py-3">
