@@ -17,7 +17,8 @@ Interaction Network is a Next.js app for mapping social relationships between pe
 	- **Events** tab (create, edit, delete, and select saved events)
 - Supports sign-in plus account request submission and admin approval/deny workflow.
 - Includes event-only graph views that show attendees plus existing connections between them.
-- Supports agent-triggered event creation from natural-language prompts with a confirmation modal (`Create` / `Cancel`).
+- Supports agent-triggered event creation from natural-language prompts using backend AI intent extraction.
+- Shows an editable confirmation modal before event creation so users can correct event name and attendees (`Create` / `Cancel`).
 - Supports optional post-create “who else should I add?” attendee suggestions.
 
 ## Planning Hub behavior
@@ -27,7 +28,8 @@ Interaction Network is a Next.js app for mapping social relationships between pe
 - Regular chat with graph-aware Gemini answers.
 - Accepts prompts like:
 	- `show me what a dinner party would look like with alice, bob, and catie`
-- For event-intent prompts, the app opens a confirmation modal before creating the event.
+- For event-intent prompts, the app first asks the backend AI to extract `eventName` + attendee list (with local parser fallback if extraction fails).
+- The confirmation modal is editable, so you can fix parsing issues before the event is created.
 - If your prompt includes follow-up language like `who else could I add`, the app auto-requests additional attendee suggestions after event creation.
 
 ### Events tab
