@@ -24,6 +24,25 @@ type GraphData = {
   links: GraphLink[];
 };
 
+type Group = {
+  id: string;
+  name: string;
+  color: string;
+};
+
+type GroupRecord = {
+  id?: unknown;
+  name?: unknown;
+  color?: unknown;
+};
+
+type GroupMembershipRecord = {
+  node_id?: unknown;
+  nodeId?: unknown;
+  group_id?: unknown;
+  groupId?: unknown;
+};
+
 type AgentMessage = {
   role: "user" | "assistant";
   text: string;
@@ -103,6 +122,8 @@ type InsertError = {
 
 const RELATION_TABLE_CANDIDATES = ["links", "connections", "edges"] as const;
 const EVENT_TABLE_CANDIDATES = ["planned_events", "events"] as const;
+const GROUP_TABLE_CANDIDATES = ["groups"] as const;
+const GROUP_MEMBERSHIP_TABLE_CANDIDATES = ["group_memberships", "node_groups"] as const;
 const RELATIONSHIP_OPTIONS = ["friends", "coworkers", "exes", "lovers", "enemies", "family"] as const;
 type RelationshipType = (typeof RELATIONSHIP_OPTIONS)[number];
 const RELATIONSHIP_COLORS: Record<RelationshipType, string> = {
@@ -113,6 +134,7 @@ const RELATIONSHIP_COLORS: Record<RelationshipType, string> = {
   enemies: "#ef4444",
   family: "#8b5cf6",
 };
+const GROUP_COLORS = ["#2563eb", "#0d9488", "#7c3aed", "#f97316", "#db2777", "#16a34a"] as const;
 
 const hasMissingColumnError = (message: string | undefined, column: string) => {
   return (message ?? "").includes(`Could not find the '${column}' column`);
@@ -123,6 +145,7 @@ const hasMissingTableError = (message: string | undefined, table: string) => {
 };
 
 const normalizePersonName = (value: string) => value.trim().replace(/\s+/g, " ").toLowerCase();
+const normalizeGroupName = (value: string) => value.trim().replace(/\s+/g, " ").toLowerCase();
 
 const getLinkEndpointId = (endpoint: unknown) => {
   if (typeof endpoint === "string" || typeof endpoint === "number") {
@@ -170,6 +193,13 @@ export default function NetworkGraph() {
   const [includeEnemies, setIncludeEnemies] = useState(true);
   const [includeLovers, setIncludeLovers] = useState(true);
   const [includeFamily, setIncludeFamily] = useState(true);
+  const [groupViewMode, setGroupViewMode] = useState<"all" | "highlight" | "only">("all");
+  const [selectedGroupId, setSelectedGroupId] = useState("");
+  const [groups, setGroups] = useState<Group[]>([]);
+  const [nodeGroupIdsByNodeId, setNodeGroupIdsByNodeId] = useState<Record<string, string[]>>({});
+  const [groupTable, setGroupTable] = useState<string | null>(null);
+  const [groupMembershipTable, setGroupMembershipTable] = useState<string | null>(null);
+  const [groupError, setGroupError] = useState<string | null>(null);
   const [isDispersed, setIsDispersed] = useState(false);
   const [layoutSnapshot, setLayoutSnapshot] = useState<Record<string, NodeLayoutSnapshot> | null>(
     null
@@ -265,42 +295,157 @@ export default function NetworkGraph() {
     });
   };
 
-  const isRelationshipVisible = (type: string) => {
-    const normalizedType = type.toLowerCase();
-    switch (normalizedType) {
-      case "friends":
-        return includeFriendships;
-      case "coworkers":
-        return includeCoworkers;
-      case "enemies":
-        return includeEnemies;
-      case "lovers":
-        return includeLovers;
-      case "family":
-        return includeFamily;
-      case "exes":
-        return includeExes;
-      default:
-        return true;
+  const normalizeGroups = useCallback((data: GroupRecord[]) => {
+    const seenIds = new Set<string>();
+
+    return data
+      .map((group, index) => {
+        const id = typeof group.id === "string" ? group.id.trim() : "";
+        const name = typeof group.name === "string" ? group.name.trim() : "";
+
+        if (!id || !name || seenIds.has(id)) {
+          return null;
+        }
+
+        seenIds.add(id);
+
+        return {
+          id,
+          name,
+          color:
+            typeof group.color === "string" && group.color
+              ? group.color
+              : GROUP_COLORS[index % GROUP_COLORS.length],
+        };
+      })
+      .filter(Boolean) as Group[];
+  }, []);
+
+  const normalizeGroupMemberships = useCallback((
+    data: GroupMembershipRecord[],
+    nodeIds: Set<string>,
+    groupIds: Set<string>
+  ) => {
+    const seenPairs = new Set<string>();
+    const nextMap: Record<string, string[]> = {};
+
+    for (const membership of data) {
+      const nodeIdSource = membership.node_id ?? membership.nodeId;
+      const groupIdSource = membership.group_id ?? membership.groupId;
+      const nodeId = typeof nodeIdSource === "string" ? nodeIdSource : "";
+      const groupId = typeof groupIdSource === "string" ? groupIdSource : "";
+
+      if (!nodeId || !groupId || !nodeIds.has(nodeId) || !groupIds.has(groupId)) {
+        continue;
+      }
+
+      const key = `${nodeId}:${groupId}`;
+      if (seenPairs.has(key)) {
+        continue;
+      }
+
+      seenPairs.add(key);
+      nextMap[nodeId] = [...(nextMap[nodeId] ?? []), groupId];
     }
-  };
+
+    return nextMap;
+  }, []);
+
+  const isRelationshipVisible = useCallback(
+    (type: string) => {
+      const normalizedType = type.toLowerCase();
+      switch (normalizedType) {
+        case "friends":
+          return includeFriendships;
+        case "coworkers":
+          return includeCoworkers;
+        case "enemies":
+          return includeEnemies;
+        case "lovers":
+          return includeLovers;
+        case "family":
+          return includeFamily;
+        case "exes":
+          return includeExes;
+        default:
+          return true;
+      }
+    },
+    [
+      includeCoworkers,
+      includeEnemies,
+      includeExes,
+      includeFamily,
+      includeFriendships,
+      includeLovers,
+    ]
+  );
+
+  const selectedGroup = useMemo(
+    () => groups.find((group) => group.id === selectedGroupId) ?? null,
+    [groups, selectedGroupId]
+  );
+
+  const groupById = useMemo(() => {
+    return new Map(groups.map((group) => [group.id, group]));
+  }, [groups]);
+
+  const isNodeInSelectedGroup = useCallback(
+    (nodeId: string) => {
+      if (!selectedGroupId) {
+        return false;
+      }
+
+      return (nodeGroupIdsByNodeId[nodeId] ?? []).includes(selectedGroupId);
+    },
+    [nodeGroupIdsByNodeId, selectedGroupId]
+  );
+
+  const groupCounts = useMemo(() => {
+    const countsByGroupId = new Map<string, number>();
+
+    for (const memberships of Object.values(nodeGroupIdsByNodeId)) {
+      for (const groupId of memberships) {
+        countsByGroupId.set(groupId, (countsByGroupId.get(groupId) ?? 0) + 1);
+      }
+    }
+
+    return groups.map((group) => ({ group, count: countsByGroupId.get(group.id) ?? 0 }));
+  }, [groups, nodeGroupIdsByNodeId]);
 
   const visibleGraphData = useMemo(
     () => ({
       nodes: graphData.nodes,
       links: graphData.links.filter((link) => isRelationshipVisible(String(link.type))),
     }),
-    [
-      graphData.nodes,
-      graphData.links,
-      includeFriendships,
-      includeCoworkers,
-      includeEnemies,
-      includeExes,
-      includeLovers,
-      includeFamily,
-    ]
+    [graphData.nodes, graphData.links, isRelationshipVisible]
   );
+
+  const groupFilteredGraphData = useMemo(() => {
+    if (groupViewMode !== "only" || !selectedGroup) {
+      return visibleGraphData;
+    }
+
+    const includedNodeIds = new Set(
+      visibleGraphData.nodes
+        .filter((node) => (nodeGroupIdsByNodeId[node.id] ?? []).includes(selectedGroup.id))
+        .map((node) => node.id)
+    );
+
+    return {
+      nodes: visibleGraphData.nodes.filter((node) => includedNodeIds.has(node.id)),
+      links: visibleGraphData.links.filter((link) => {
+        const source = getLinkEndpointId((link as { source?: unknown }).source);
+        const target = getLinkEndpointId((link as { target?: unknown }).target);
+
+        if (!source || !target) {
+          return false;
+        }
+
+        return includedNodeIds.has(source) && includedNodeIds.has(target);
+      }),
+    };
+  }, [groupViewMode, nodeGroupIdsByNodeId, selectedGroup, visibleGraphData]);
 
   const selectedEvent = useMemo(
     () => plannedEvents.find((event) => event.id === selectedEventId) ?? null,
@@ -341,7 +486,7 @@ export default function NetworkGraph() {
       }
     }
 
-    const links = visibleGraphData.links.filter((link) => {
+    const links = groupFilteredGraphData.links.filter((link) => {
       const source = getLinkEndpointId((link as { source?: unknown }).source);
       const target = getLinkEndpointId((link as { target?: unknown }).target);
 
@@ -353,9 +498,69 @@ export default function NetworkGraph() {
     });
 
     return { nodes, links };
-  }, [graphData.nodes, selectedEvent, visibleGraphData.links]);
+  }, [graphData.nodes, selectedEvent, groupFilteredGraphData.links]);
 
-  const activeGraphData = selectedEvent ? eventGraphData ?? visibleGraphData : visibleGraphData;
+  const activeGraphData = selectedEvent
+    ? eventGraphData ?? groupFilteredGraphData
+    : groupFilteredGraphData;
+
+  const getRenderedNodeColor = useCallback(
+    (node: NodeObject) => {
+      const baseColor = typeof node.color === "string" && node.color ? node.color : "#3b82f6";
+
+      if (selectedEvent || groupViewMode !== "highlight" || !selectedGroup) {
+        return baseColor;
+      }
+
+      const nodeId = getLinkEndpointId((node as { id?: unknown }).id);
+      if (!nodeId || isNodeInSelectedGroup(nodeId)) {
+        return baseColor;
+      }
+
+      return "#cbd5e1";
+    },
+    [groupViewMode, isNodeInSelectedGroup, selectedEvent, selectedGroup]
+  );
+
+  const getRenderedLinkColor = useCallback(
+    (link: LinkObject) => {
+      const baseColor = typeof link.color === "string" && link.color ? link.color : "#94a3b8";
+
+      if (selectedEvent || groupViewMode !== "highlight" || !selectedGroup) {
+        return baseColor;
+      }
+
+      const sourceId = getLinkEndpointId((link as { source?: unknown }).source);
+      const targetId = getLinkEndpointId((link as { target?: unknown }).target);
+
+      if (!sourceId || !targetId) {
+        return "#e2e8f0";
+      }
+
+      return isNodeInSelectedGroup(sourceId) && isNodeInSelectedGroup(targetId)
+        ? baseColor
+        : "#e2e8f0";
+    },
+    [groupViewMode, isNodeInSelectedGroup, selectedEvent, selectedGroup]
+  );
+
+  const getRenderedLinkWidth = useCallback(
+    (link: LinkObject) => {
+      if (selectedEvent || groupViewMode !== "highlight" || !selectedGroup) {
+        return 2;
+      }
+
+      const sourceId = getLinkEndpointId((link as { source?: unknown }).source);
+      const targetId = getLinkEndpointId((link as { target?: unknown }).target);
+
+      if (!sourceId || !targetId) {
+        return 1;
+      }
+
+      return isNodeInSelectedGroup(sourceId) && isNodeInSelectedGroup(targetId) ? 2 : 1;
+    },
+    [groupViewMode, isNodeInSelectedGroup, selectedEvent, selectedGroup]
+  );
 
   const getEventStorageKey = useCallback(
     (userId: string) => `interaction-network-events:${userId}`,
@@ -529,6 +734,69 @@ export default function NetworkGraph() {
     [currentUserId, getEventStorageKey]
   );
 
+  const getGroupStorageKey = useCallback(
+    (userId: string) => `interaction-network-groups:${userId}`,
+    []
+  );
+
+  const saveGroupsToLocalStorage = useCallback(
+    (nextGroups: Group[], nextMembershipsByNodeId: Record<string, string[]>) => {
+      if (!currentUserId) {
+        return;
+      }
+
+      window.localStorage.setItem(
+        getGroupStorageKey(currentUserId),
+        JSON.stringify({ groups: nextGroups, memberships: nextMembershipsByNodeId })
+      );
+    },
+    [currentUserId, getGroupStorageKey]
+  );
+
+  const fetchGroupsFromAvailableTable = useCallback(async (userId: string) => {
+    for (const table of GROUP_TABLE_CANDIDATES) {
+      let scopedResult = await supabase.from(table).select("*").eq("user_id", userId);
+
+      if (scopedResult.error && hasMissingColumnError(scopedResult.error.message, "user_id")) {
+        scopedResult = await supabase.from(table).select("*");
+      }
+
+      if (scopedResult.error) {
+        if (hasMissingTableError(scopedResult.error.message, table)) {
+          continue;
+        }
+
+        return { table: null, data: [], error: scopedResult.error };
+      }
+
+      return { table, data: scopedResult.data ?? [], error: null };
+    }
+
+    return { table: null, data: [], error: null };
+  }, []);
+
+  const fetchGroupMembershipsFromAvailableTable = useCallback(async (userId: string) => {
+    for (const table of GROUP_MEMBERSHIP_TABLE_CANDIDATES) {
+      let scopedResult = await supabase.from(table).select("*").eq("user_id", userId);
+
+      if (scopedResult.error && hasMissingColumnError(scopedResult.error.message, "user_id")) {
+        scopedResult = await supabase.from(table).select("*");
+      }
+
+      if (scopedResult.error) {
+        if (hasMissingTableError(scopedResult.error.message, table)) {
+          continue;
+        }
+
+        return { table: null, data: [], error: scopedResult.error };
+      }
+
+      return { table, data: scopedResult.data ?? [], error: null };
+    }
+
+    return { table: null, data: [], error: null };
+  }, []);
+
   const fetchLinksFromAvailableTable = useCallback(async () => {
     for (const table of RELATION_TABLE_CANDIDATES) {
       const scopedResult = await supabase.from(table).select("*");
@@ -547,7 +815,7 @@ export default function NetworkGraph() {
     return { table: null, data: [], error: null };
   }, []);
 
-  const fetchGraphData = useCallback(async () => {
+  const fetchGraphData = useCallback(async (userIdOverride?: string | null) => {
     setIsLoading(true);
 
     const effectiveNodesResult = await supabase.from("nodes").select("*");
@@ -566,13 +834,105 @@ export default function NetworkGraph() {
 
     const nodes = normalizeNodes((effectiveNodesResult.data ?? []) as Record<string, unknown>[]);
     const links = normalizeLinks((linksLookup.data ?? []) as Record<string, unknown>[]);
+    const effectiveUserId = userIdOverride ?? currentUserId;
+
+    if (effectiveUserId) {
+      const groupsLookup = await fetchGroupsFromAvailableTable(effectiveUserId);
+      const membershipsLookup = await fetchGroupMembershipsFromAvailableTable(effectiveUserId);
+
+      if (groupsLookup.error || membershipsLookup.error) {
+        setGroupError(
+          groupsLookup.error?.message ??
+            membershipsLookup.error?.message ??
+            "Unable to load groups from Supabase."
+        );
+      } else if (groupsLookup.table && membershipsLookup.table) {
+        const normalizedGroups = normalizeGroups((groupsLookup.data ?? []) as GroupRecord[]);
+        const nodeIds = new Set(nodes.map((node) => node.id));
+        const groupIds = new Set(normalizedGroups.map((group) => group.id));
+        const membershipsByNodeId = normalizeGroupMemberships(
+          (membershipsLookup.data ?? []) as GroupMembershipRecord[],
+          nodeIds,
+          groupIds
+        );
+
+        setGroups(normalizedGroups);
+        setNodeGroupIdsByNodeId(membershipsByNodeId);
+        setGroupTable(groupsLookup.table);
+        setGroupMembershipTable(membershipsLookup.table);
+        setGroupError(null);
+      } else {
+        const localKey = getGroupStorageKey(effectiveUserId);
+        const stored = window.localStorage.getItem(localKey);
+
+        if (!stored) {
+          setGroups([]);
+          setNodeGroupIdsByNodeId({});
+          setGroupTable(null);
+          setGroupMembershipTable(null);
+          setGroupError(
+            "Create groups and group_memberships tables in Supabase to persist groups across devices."
+          );
+        } else {
+          try {
+            const parsed = JSON.parse(stored) as {
+              groups?: GroupRecord[];
+              memberships?: Record<string, string[]>;
+            };
+            const normalizedGroups = normalizeGroups(parsed.groups ?? []);
+            const nodeIds = new Set(nodes.map((node) => node.id));
+            const groupIds = new Set(normalizedGroups.map((group) => group.id));
+            const rawMemberships = parsed.memberships ?? {};
+            const membershipsByNodeId: Record<string, string[]> = {};
+
+            for (const [nodeId, groupIdList] of Object.entries(rawMemberships)) {
+              if (!nodeIds.has(nodeId) || !Array.isArray(groupIdList)) {
+                continue;
+              }
+
+              membershipsByNodeId[nodeId] = groupIdList.filter(
+                (groupId) => typeof groupId === "string" && groupIds.has(groupId)
+              );
+            }
+
+            setGroups(normalizedGroups);
+            setNodeGroupIdsByNodeId(membershipsByNodeId);
+            setGroupTable(null);
+            setGroupMembershipTable(null);
+            setGroupError(
+              "Create groups and group_memberships tables in Supabase to persist groups across devices."
+            );
+          } catch {
+            setGroups([]);
+            setNodeGroupIdsByNodeId({});
+            setGroupTable(null);
+            setGroupMembershipTable(null);
+            setGroupError("Unable to read group data stored in this browser.");
+          }
+        }
+      }
+    } else {
+      setGroups([]);
+      setNodeGroupIdsByNodeId({});
+      setGroupTable(null);
+      setGroupMembershipTable(null);
+      setGroupError(null);
+    }
 
     setError(null);
     setRelationTable(linksLookup.table);
     setGraphData({ nodes, links });
 
     setIsLoading(false);
-  }, [fetchLinksFromAvailableTable]);
+  }, [
+    currentUserId,
+    fetchGroupMembershipsFromAvailableTable,
+    fetchGroupsFromAvailableTable,
+    fetchLinksFromAvailableTable,
+    getGroupStorageKey,
+    normalizeGroupMemberships,
+    normalizeGroups,
+  ]);
 
   const handleAddPerson = async () => {
     if (!currentUserId) {
@@ -1195,6 +1555,13 @@ export default function NetworkGraph() {
     setPersonAQuery("");
     setPersonBQuery("");
     setConnectionType("friends");
+    setGroupViewMode("all");
+    setSelectedGroupId("");
+    setGroups([]);
+    setNodeGroupIdsByNodeId({});
+    setGroupTable(null);
+    setGroupMembershipTable(null);
+    setGroupError(null);
     setIsApprovalsMinimized(false);
     setIsSidebarMinimized(false);
     setIsSigningIn(false);
@@ -1346,6 +1713,203 @@ export default function NetworkGraph() {
     setIsSaving(false);
   };
 
+  const editNodeGroups = async (node: { id: string; name: string }) => {
+    if (!currentUserId) {
+      setError("You must be signed in before editing groups.");
+      return;
+    }
+
+    const currentGroupNames = (nodeGroupIdsByNodeId[node.id] ?? [])
+      .map((groupId) => groupById.get(groupId)?.name)
+      .filter((name): name is string => Boolean(name));
+
+    const nextInput = window.prompt(
+      "Enter comma-separated groups (example: book club, neighbors):",
+      currentGroupNames.join(", ")
+    );
+
+    if (nextInput === null) {
+      return;
+    }
+
+    const nextNames = Array.from(
+      new Map(
+        nextInput
+          .split(",")
+          .map((name) => name.trim())
+          .filter(Boolean)
+          .map((name) => [normalizeGroupName(name), name])
+      ).values()
+    );
+
+    const sameMemberships =
+      nextNames.length === currentGroupNames.length &&
+      nextNames.every((name) =>
+        currentGroupNames.some((currentName) => normalizeGroupName(currentName) === normalizeGroupName(name))
+      );
+
+    if (sameMemberships) {
+      return;
+    }
+
+    setIsSaving(true);
+    setError(null);
+    setGroupError(null);
+
+    const groupsByNormalizedName = new Map(groups.map((group) => [normalizeGroupName(group.name), group]));
+    const missingNames = nextNames.filter((name) => !groupsByNormalizedName.has(normalizeGroupName(name)));
+
+    let nextGroups = [...groups];
+    const nextNodeGroupIdsByNodeId: Record<string, string[]> = {
+      ...nodeGroupIdsByNodeId,
+    };
+
+    if (groupTable && groupMembershipTable) {
+      let persistenceFailed: string | null = null;
+
+      for (let index = 0; index < missingNames.length; index += 1) {
+        const name = missingNames[index];
+        const color = GROUP_COLORS[(groups.length + index) % GROUP_COLORS.length];
+        const payloads = [
+          { name, color, user_id: currentUserId },
+          { name, user_id: currentUserId },
+          { name, color },
+          { name },
+        ];
+
+        let createdGroup: Group | null = null;
+
+        for (const payload of payloads) {
+          const insertResult = await supabase.from(groupTable).insert(payload).select("*").single();
+
+          if (insertResult.error) {
+            if (
+              hasMissingColumnError(insertResult.error.message, "color") ||
+              hasMissingColumnError(insertResult.error.message, "user_id")
+            ) {
+              continue;
+            }
+
+            persistenceFailed = insertResult.error.message;
+            break;
+          }
+
+          const row = insertResult.data as GroupRecord;
+          if (typeof row.id !== "string" || typeof row.name !== "string") {
+            persistenceFailed = "Unable to read created group.";
+            break;
+          }
+
+          createdGroup = {
+            id: row.id,
+            name: row.name,
+            color: typeof row.color === "string" && row.color ? row.color : color,
+          };
+          break;
+        }
+
+        if (createdGroup) {
+          nextGroups = [...nextGroups, createdGroup];
+          groupsByNormalizedName.set(normalizeGroupName(createdGroup.name), createdGroup);
+          continue;
+        }
+
+        if (!persistenceFailed) {
+          persistenceFailed = `Unable to create group \"${name}\".`;
+        }
+        break;
+      }
+
+      if (!persistenceFailed) {
+        let deleteResult = await supabase.from(groupMembershipTable).delete().eq("node_id", node.id);
+
+        if (deleteResult.error && hasMissingColumnError(deleteResult.error.message, "node_id")) {
+          deleteResult = await supabase.from(groupMembershipTable).delete().eq("nodeId", node.id);
+        }
+
+        if (deleteResult.error) {
+          persistenceFailed = deleteResult.error.message;
+        }
+      }
+
+      if (!persistenceFailed) {
+        const targetGroupIds = nextNames
+          .map((name) => groupsByNormalizedName.get(normalizeGroupName(name))?.id)
+          .filter((groupId): groupId is string => Boolean(groupId));
+
+        for (const groupId of targetGroupIds) {
+          const payloads = [
+            { node_id: node.id, group_id: groupId, user_id: currentUserId },
+            { node_id: node.id, group_id: groupId },
+            { nodeId: node.id, groupId: groupId, user_id: currentUserId },
+            { nodeId: node.id, groupId: groupId },
+          ];
+
+          let inserted = false;
+
+          for (const payload of payloads) {
+            const insertResult = await supabase.from(groupMembershipTable).insert(payload);
+
+            if (insertResult.error) {
+              if (
+                hasMissingColumnError(insertResult.error.message, "node_id") ||
+                hasMissingColumnError(insertResult.error.message, "group_id") ||
+                hasMissingColumnError(insertResult.error.message, "nodeId") ||
+                hasMissingColumnError(insertResult.error.message, "groupId") ||
+                hasMissingColumnError(insertResult.error.message, "user_id")
+              ) {
+                continue;
+              }
+
+              persistenceFailed = insertResult.error.message;
+              break;
+            }
+
+            inserted = true;
+            break;
+          }
+
+          if (!inserted) {
+            if (!persistenceFailed) {
+              persistenceFailed = "Unable to save group memberships.";
+            }
+            break;
+          }
+        }
+      }
+
+      if (!persistenceFailed) {
+        await fetchGraphData(currentUserId);
+        setIsSaving(false);
+        return;
+      }
+
+      setGroupError(`${persistenceFailed} Using browser-local group storage for now.`);
+    }
+
+    const missingLocalGroups = missingNames.map((name, index) => ({
+      id: `local-group:${crypto.randomUUID()}`,
+      name,
+      color: GROUP_COLORS[(groups.length + index) % GROUP_COLORS.length],
+    }));
+    nextGroups = [...nextGroups, ...missingLocalGroups];
+
+    const nextGroupsByNormalizedName = new Map(
+      nextGroups.map((group) => [normalizeGroupName(group.name), group])
+    );
+    nextNodeGroupIdsByNodeId[node.id] = nextNames
+      .map((name) => nextGroupsByNormalizedName.get(normalizeGroupName(name))?.id)
+      .filter((groupId): groupId is string => Boolean(groupId));
+
+    setGroups(nextGroups);
+    setNodeGroupIdsByNodeId(nextNodeGroupIdsByNodeId);
+    saveGroupsToLocalStorage(nextGroups, nextNodeGroupIdsByNodeId);
+    if (!groupTable || !groupMembershipTable) {
+      setGroupError("Create groups and group_memberships tables in Supabase to persist groups across devices.");
+    }
+    setIsSaving(false);
+  };
+
   const editConnectionType = async (link: { id?: string; source: string; target: string; type: string }) => {
     const currentType = link.type.toLowerCase();
     const nextTypeInput = window
@@ -1470,6 +2034,16 @@ export default function NetworkGraph() {
     }
 
     await editConnectionType(target.link);
+  };
+
+  const handleContextMenuEditGroups = async () => {
+    if (!contextMenu || contextMenu.target.kind !== "node") {
+      return;
+    }
+
+    const targetNode = contextMenu.target.node;
+    setContextMenu(null);
+    await editNodeGroups(targetNode);
   };
 
   const handleAddConnection = async () => {
@@ -2225,7 +2799,7 @@ export default function NetworkGraph() {
       };
     }
 
-    const visible = visibleGraphData;
+    const visible = groupFilteredGraphData;
     const nodeIds = visible.nodes.map((node) => node.id);
 
     if (nodeIds.length === 0) {
@@ -2472,7 +3046,7 @@ export default function NetworkGraph() {
       void (async () => {
         const userId = await getCurrentUserId();
         setCurrentUserId(userId);
-        await fetchGraphData();
+        await fetchGraphData(userId);
       })();
     }, 0);
 
@@ -2480,6 +3054,16 @@ export default function NetworkGraph() {
       window.clearTimeout(timeoutId);
     };
   }, [fetchGraphData, getCurrentUserId]);
+
+  useEffect(() => {
+    if (!selectedGroupId) {
+      return;
+    }
+
+    if (!groups.some((group) => group.id === selectedGroupId)) {
+      setSelectedGroupId("");
+    }
+  }, [groups, selectedGroupId]);
 
   useEffect(() => {
     if (!currentUserId) {
@@ -2702,7 +3286,64 @@ export default function NetworkGraph() {
             />
             Include family
           </label>
+
+          <div className="h-5 w-px bg-slate-200" />
+
+          <label className="flex items-center gap-2 text-sm text-slate-700">
+            Group view
+            <select
+              value={groupViewMode}
+              onChange={(event) => setGroupViewMode(event.target.value as "all" | "highlight" | "only")}
+              className="rounded border border-slate-300 px-2 py-1 text-sm"
+            >
+              <option value="all">All</option>
+              <option value="highlight">Highlight selected</option>
+              <option value="only">Only selected</option>
+            </select>
+          </label>
+
+          <label className="flex items-center gap-2 text-sm text-slate-700">
+            Group
+            <select
+              value={selectedGroupId}
+              onChange={(event) => setSelectedGroupId(event.target.value)}
+              className="rounded border border-slate-300 px-2 py-1 text-sm"
+              disabled={groups.length === 0}
+            >
+              <option value="">{groups.length === 0 ? "No groups" : "Choose group"}</option>
+              {groups.map((group) => (
+                <option key={group.id} value={group.id}>
+                  {group.name}
+                </option>
+              ))}
+            </select>
+          </label>
         </div>
+      </section>
+
+      <section className="px-4 py-2 bg-white border-t border-slate-200 flex flex-wrap items-center gap-2">
+        {groupCounts.length === 0 ? (
+          <p className="text-xs text-slate-500">No groups yet. Right-click a person and choose Edit Groups.</p>
+        ) : (
+          groupCounts.map(({ group, count }) => (
+            <button
+              key={group.id}
+              type="button"
+              onClick={() => setSelectedGroupId(group.id)}
+              className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs ${
+                selectedGroupId === group.id ? "border-slate-700 bg-slate-100" : "border-slate-200 bg-white"
+              }`}
+              title={`${group.name}: ${count}`}
+            >
+              <span
+                className="inline-block h-2.5 w-2.5 rounded-full"
+                style={{ backgroundColor: group.color }}
+              />
+              {group.name} ({count})
+            </button>
+          ))
+        )}
+        {groupError ? <p className="text-xs text-amber-700">{groupError}</p> : null}
       </section>
 
       {!currentUserId && showAccountRequestForm ? (
@@ -3036,13 +3677,13 @@ export default function NetworkGraph() {
 
               const fontSize = 12 / globalScale;
               ctx.font = `${fontSize}px Sans-Serif`;
-              ctx.fillStyle = typeof node.color === "string" ? node.color : "#3b82f6";
+              ctx.fillStyle = getRenderedNodeColor(node);
               ctx.fillText(label, (node.x ?? 0) + 6, (node.y ?? 0) + 3);
             }}
             nodeCanvasObjectMode={() => "after"}
-            nodeColor="color"
-            linkColor="color"
-            linkWidth={2}
+            nodeColor={getRenderedNodeColor}
+            linkColor={getRenderedLinkColor}
+            linkWidth={getRenderedLinkWidth}
           />
 
           {contextMenu ? (
@@ -3059,14 +3700,35 @@ export default function NetworkGraph() {
               >
                 {contextMenu.target.kind === "node" ? "Delete Node" : "Delete Connection"}
               </button>
-              <button
-                onClick={() => {
-                  void handleContextMenuEdit();
-                }}
-                className="w-full text-left px-3 py-2 text-sm rounded hover:bg-slate-100"
-              >
-                {contextMenu.target.kind === "node" ? "Edit Name" : "Edit Type"}
-              </button>
+              {contextMenu.target.kind === "node" ? (
+                <>
+                  <button
+                    onClick={() => {
+                      void handleContextMenuEdit();
+                    }}
+                    className="w-full text-left px-3 py-2 text-sm rounded hover:bg-slate-100"
+                  >
+                    Edit Name
+                  </button>
+                  <button
+                    onClick={() => {
+                      void handleContextMenuEditGroups();
+                    }}
+                    className="w-full text-left px-3 py-2 text-sm rounded hover:bg-slate-100"
+                  >
+                    Edit Groups
+                  </button>
+                </>
+              ) : (
+                <button
+                  onClick={() => {
+                    void handleContextMenuEdit();
+                  }}
+                  className="w-full text-left px-3 py-2 text-sm rounded hover:bg-slate-100"
+                >
+                  Edit Type
+                </button>
+              )}
             </div>
           ) : null}
         </div>
@@ -3113,6 +3775,12 @@ export default function NetworkGraph() {
 
                 {sidebarTab === "agent" ? (
                   <>
+                    {agentError ? (
+                      <div className="border-b border-red-100 bg-red-50 px-3 py-2 text-xs text-red-700">
+                        {agentError}
+                      </div>
+                    ) : null}
+
                     {agentMessages.length <= 1 ? (
                       <div className="p-3 border-b border-slate-200 space-y-2">
                         <p className="text-xs font-semibold text-slate-600 uppercase">Example Prompts</p>

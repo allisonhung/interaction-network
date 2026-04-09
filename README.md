@@ -7,6 +7,8 @@ Interaction Network is a Next.js app for mapping social relationships between pe
 - Visualizes people and relationship edges in an interactive force graph.
 - Supports relationship types: `friends`, `coworkers`, `exes`, `lovers`, `enemies`, `family`.
 - Colors relationship edges by type (`coworkers` is gray).
+- Supports person groups (for example: `book club`) with multi-group membership per person.
+- Includes group viewing modes: show all, highlight one selected group, or show only one group.
 - Lets signed-in users add/edit/delete nodes and connections.
 - Includes relationship visibility toggles (include/exclude by edge type).
 - Includes a Disperse layout mode with automatic zoom-to-fit.
@@ -98,6 +100,8 @@ At minimum, create/maintain these tables:
 
 - `nodes` (person nodes)
 - relationship table: app supports `links`, `connections`, or `edges`
+- `groups` (group metadata, such as name and color)
+- `group_memberships` (join table linking people to groups)
 - `signup_requests` (for account approval flow)
 - `planned_events` or `events` (for per-account event planning)
 
@@ -108,6 +112,17 @@ Notes:
 - Event rows should include `user_id`, `name`, `attendees` (JSON), and `created_at`.
 - Use row-level security so users can only read/write events where `user_id = auth.uid()`.
 - If `planned_events`/`events` is missing, the app falls back to browser-local storage for events.
+
+## Apply migration
+
+To add group persistence schema and RLS, run the SQL migration:
+
+- `supabase/migrations/20260408_add_groups_and_group_memberships.sql`
+
+You can apply it in either of these ways:
+
+- Supabase Dashboard → SQL Editor → paste/run migration SQL.
+- Supabase CLI (if configured): `supabase db push`.
 
 ## Authentication and invite flow
 
