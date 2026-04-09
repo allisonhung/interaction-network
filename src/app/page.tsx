@@ -2391,6 +2391,11 @@ export default function NetworkGraph() {
       return;
     }
 
+    if (target.kind === "group") {
+      setError("Delete group is not available yet. Right-click the group to edit it.");
+      return;
+    }
+
     await deleteConnection(target.link);
   };
 
