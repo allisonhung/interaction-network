@@ -3765,73 +3765,7 @@ export default function NetworkGraph() {
             Include family
           </label>
 
-          <div className="h-5 w-px bg-slate-200" />
-
-          <label className="flex items-center gap-2 text-sm text-slate-700">
-            Group view
-            <select
-              value={groupViewMode}
-              onChange={(event) => setGroupViewMode(event.target.value as "all" | "highlight" | "only")}
-              className="rounded border border-slate-300 px-2 py-1 text-sm"
-            >
-              <option value="all">All</option>
-              <option value="highlight">Highlight selected</option>
-              <option value="only">Only selected</option>
-            </select>
-          </label>
-
         </div>
-      </section>
-
-      <section className="px-4 py-2 border-0 bg-transparent flex flex-wrap items-center gap-2">
-        <button
-          type="button"
-          onClick={handleOpenCreateGroupForm}
-          disabled={!currentUserId || isSaving}
-          className="inline-flex items-center gap-1.5 rounded-full border border-slate-300 bg-white px-3 py-1 text-xs text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
-          title="Add group"
-        >
-          <span aria-hidden>+</span>
-          Add Group
-        </button>
-
-        {groupCounts.map(({ group, count }) => (
-          <button
-            key={group.id}
-            type="button"
-            onClick={() => setSelectedGroupId((current) => (current === group.id ? "" : group.id))}
-            onContextMenu={(event) => {
-              setSelectedGroupId(group.id);
-              openContextMenu(
-                {
-                  kind: "group",
-                  group: {
-                    id: group.id,
-                    name: group.name,
-                  },
-                },
-                event as unknown as MouseEvent
-              );
-            }}
-            className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs ${
-              selectedGroupId === group.id ? "border-slate-700 bg-slate-100" : "border-slate-200 bg-white"
-            }`}
-            title={`${group.name}: ${count}`}
-          >
-            <span
-              className="inline-block h-2.5 w-2.5 rounded-full"
-              style={{ backgroundColor: group.color }}
-            />
-            {group.name} ({count})
-          </button>
-        ))}
-        {groupCounts.length === 0 ? (
-          <p className="text-xs text-slate-500">No groups yet. Add one to get started.</p>
-        ) : null}
-        {groupCounts.length > 0 ? (
-          <p className="text-xs text-slate-500">Click a group to select it. Click again to clear.</p>
-        ) : null}
-        {groupError ? <p className="text-xs text-amber-700">{groupError}</p> : null}
       </section>
 
       {showCreateGroupForm ? (
@@ -4211,6 +4145,75 @@ export default function NetworkGraph() {
       {/* Graph + Agent Area */}
       <div className={`flex-grow overflow-hidden flex ${currentUserId ? "pr-96" : ""}`}>
         <div ref={graphAreaRef} className="flex-1 overflow-hidden relative">
+          {currentUserId ? (
+            <section className="fixed bottom-4 left-4 z-20 w-[22rem] rounded-lg border border-slate-200 bg-white/95 p-3 shadow-md backdrop-blur-sm">
+              <div className="flex items-center justify-between gap-2">
+                <label className="flex items-center gap-2 text-sm text-slate-700">
+                  Group view
+                  <select
+                    value={groupViewMode}
+                    onChange={(event) => setGroupViewMode(event.target.value as "all" | "highlight" | "only")}
+                    className="rounded border border-slate-300 px-2 py-1 text-sm"
+                  >
+                    <option value="all">All</option>
+                    <option value="highlight">Highlight selected</option>
+                    <option value="only">Only selected</option>
+                  </select>
+                </label>
+                <button
+                  type="button"
+                  onClick={handleOpenCreateGroupForm}
+                  disabled={!currentUserId || isSaving}
+                  className="inline-flex items-center gap-1.5 rounded-full border border-slate-300 bg-white px-3 py-1 text-xs text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                  title="Add group"
+                >
+                  <span aria-hidden>+</span>
+                  Add Group
+                </button>
+              </div>
+
+              <div className="mt-3 flex max-h-40 flex-wrap gap-2 overflow-y-auto pr-1">
+                {groupCounts.map(({ group, count }) => (
+                  <button
+                    key={group.id}
+                    type="button"
+                    onClick={() => setSelectedGroupId((current) => (current === group.id ? "" : group.id))}
+                    onContextMenu={(event) => {
+                      setSelectedGroupId(group.id);
+                      openContextMenu(
+                        {
+                          kind: "group",
+                          group: {
+                            id: group.id,
+                            name: group.name,
+                          },
+                        },
+                        event as unknown as MouseEvent
+                      );
+                    }}
+                    className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs ${
+                      selectedGroupId === group.id ? "border-slate-700 bg-slate-100" : "border-slate-200 bg-white"
+                    }`}
+                    title={`${group.name}: ${count}`}
+                  >
+                    <span
+                      className="inline-block h-2.5 w-2.5 rounded-full"
+                      style={{ backgroundColor: group.color }}
+                    />
+                    {group.name} ({count})
+                  </button>
+                ))}
+              </div>
+
+              {groupCounts.length === 0 ? (
+                <p className="mt-2 text-xs text-slate-500">No groups yet. Add one to get started.</p>
+              ) : (
+                <p className="mt-2 text-xs text-slate-500">Click a group to select it. Click again to clear.</p>
+              )}
+              {groupError ? <p className="mt-1 text-xs text-amber-700">{groupError}</p> : null}
+            </section>
+          ) : null}
+
           {selectedEvent ? (
             <div className="absolute left-3 top-3 z-10 rounded border border-slate-200 bg-white/95 px-3 py-2 shadow-sm backdrop-blur-sm">
               <div className="flex items-center gap-2">
