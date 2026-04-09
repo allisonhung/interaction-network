@@ -124,6 +124,14 @@ You can apply it in either of these ways:
 - Supabase Dashboard → SQL Editor → paste/run migration SQL.
 - Supabase CLI (if configured): `supabase db push`.
 
+If you already ran the first groups migration and see this error when assigning a person to a group:
+
+- `new row violates row-level security policy for table "group_memberships"`
+
+Run this follow-up migration:
+
+- `supabase/migrations/20260408_fix_group_memberships_rls_shared_nodes.sql`
+
 ## Authentication and invite flow
 
 - Users can request accounts from the UI.
