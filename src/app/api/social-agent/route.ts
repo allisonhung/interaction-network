@@ -13,6 +13,7 @@ type GraphLink = {
 
 type RequestBody = {
   task?: "chat" | "extract-event-intent";
+  stream?: boolean;
   question?: string;
   messageHistory?: Array<{
     role?: "user" | "assistant";
@@ -27,6 +28,148 @@ type RequestBody = {
 type EventIntent = {
   eventName: string;
   attendeeNames: string[];
+};
+
+const extractTextFromGeminiResponse = (json: {
+  candidates?: Array<{
+    content?: {
+      parts?: Array<{ text?: string }>;
+    };
+  }>;
+}) => {
+  return json.candidates?.[0]?.content?.parts
+    ?.map((part) => part.text ?? "")
+    .join("")
+    .trim();
+};
+
+const streamFromGemini = async ({
+  apiKey,
+  modelName,
+  payload,
+}: {
+  apiKey: string;
+  modelName: string;
+  payload: string;
+}) => {
+  const geminiResponse = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:streamGenerateContent?alt=sse&key=${encodeURIComponent(apiKey)}`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: payload,
+    }
+  );
+
+  if (!geminiResponse.ok || !geminiResponse.body) {
+    const errorText = await geminiResponse.text();
+    return { stream: null, errorText: errorText || "No stream body returned." };
+  }
+
+  const encoder = new TextEncoder();
+  const decoder = new TextDecoder();
+
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const reader = geminiResponse.body?.getReader();
+
+      if (!reader) {
+        controller.close();
+        return;
+      }
+
+      let buffer = "";
+      let fullAnswer = "";
+
+      const emitChunk = (chunkText: string) => {
+        if (!chunkText) {
+          return;
+        }
+
+        if (chunkText.startsWith(fullAnswer)) {
+          const delta = chunkText.slice(fullAnswer.length);
+          if (delta) {
+            fullAnswer = chunkText;
+            controller.enqueue(encoder.encode(delta));
+          }
+          return;
+        }
+
+        fullAnswer += chunkText;
+        controller.enqueue(encoder.encode(chunkText));
+      };
+
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+
+          if (done) {
+            break;
+          }
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? "";
+
+          for (const rawLine of lines) {
+            const line = rawLine.trim();
+
+            if (!line.startsWith("data:")) {
+              continue;
+            }
+
+            const dataPayload = line.slice(5).trim();
+            if (!dataPayload || dataPayload === "[DONE]") {
+              continue;
+            }
+
+            try {
+              const eventJson = JSON.parse(dataPayload) as {
+                candidates?: Array<{
+                  content?: {
+                    parts?: Array<{ text?: string }>;
+                  };
+                }>;
+              };
+              const textChunk = extractTextFromGeminiResponse(eventJson) ?? "";
+              emitChunk(textChunk);
+            } catch {
+              continue;
+            }
+          }
+        }
+
+        if (buffer.trim().startsWith("data:")) {
+          const maybePayload = buffer.trim().slice(5).trim();
+          if (maybePayload && maybePayload !== "[DONE]") {
+            try {
+              const trailingJson = JSON.parse(maybePayload) as {
+                candidates?: Array<{
+                  content?: {
+                    parts?: Array<{ text?: string }>;
+                  };
+                }>;
+              };
+              const trailingText = extractTextFromGeminiResponse(trailingJson) ?? "";
+              emitChunk(trailingText);
+            } catch {
+              // ignore malformed trailing event
+            }
+          }
+        }
+
+        controller.close();
+      } catch (error) {
+        controller.error(error);
+      } finally {
+        reader.releaseLock();
+      }
+    },
+  });
+
+  return { stream, errorText: "" };
 };
 
 const parseEventIntentFromModelText = (text: string): EventIntent | null => {
@@ -89,6 +232,7 @@ export async function POST(request: Request) {
 
   const question = body.question?.trim();
   const task = body.task ?? "chat";
+  const shouldStream = body.stream === true && task === "chat";
   const messageHistory = (body.messageHistory ?? [])
     .filter((message) => (message.text ?? "").trim().length > 0)
     .slice(-10)
@@ -199,6 +343,33 @@ export async function POST(request: Request) {
 
   let lastErrorText = "";
 
+  if (shouldStream) {
+    for (const modelName of orderedModelNames) {
+      const streamResult = await streamFromGemini({
+        apiKey,
+        modelName,
+        payload,
+      });
+
+      if (streamResult.stream) {
+        return new Response(streamResult.stream, {
+          status: 200,
+          headers: {
+            "Content-Type": "text/plain; charset=utf-8",
+            "Cache-Control": "no-cache, no-transform",
+          },
+        });
+      }
+
+      lastErrorText = streamResult.errorText;
+    }
+
+    return NextResponse.json(
+      { error: `LLM stream request failed: ${lastErrorText || "No supported Gemini model responded."}` },
+      { status: 502 }
+    );
+  }
+
   for (const modelName of orderedModelNames) {
     const geminiResponse = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${encodeURIComponent(apiKey)}`,
@@ -224,10 +395,7 @@ export async function POST(request: Request) {
       }>;
     };
 
-    const answer = json.candidates?.[0]?.content?.parts
-      ?.map((part) => part.text ?? "")
-      .join("")
-      .trim();
+    const answer = extractTextFromGeminiResponse(json);
 
     if (answer) {
       if (task === "extract-event-intent") {

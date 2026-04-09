@@ -186,6 +186,8 @@ export default function NetworkGraph() {
     ForceGraphMethods<NodeObject, LinkObject> | undefined
   >(undefined);
   const graphAreaRef = useRef<HTMLDivElement | null>(null);
+  const agentMessagesScrollRef = useRef<HTMLDivElement | null>(null);
+  const shouldAutoScrollAgentMessagesRef = useRef(true);
   const [graphData, setGraphData] = useState<GraphData>({ nodes: [], links: [] });
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -261,6 +263,28 @@ export default function NetworkGraph() {
         "Ask about group dynamics. Example: Who should I invite to maximize friends with no enemies present?",
     },
   ]);
+
+  const handleAgentMessagesScroll = useCallback(() => {
+    const container = agentMessagesScrollRef.current;
+    if (!container) {
+      return;
+    }
+
+    const distanceFromBottom =
+      container.scrollHeight - container.scrollTop - container.clientHeight;
+    shouldAutoScrollAgentMessagesRef.current = distanceFromBottom <= 64;
+  }, []);
+
+  useEffect(() => {
+    const container = agentMessagesScrollRef.current;
+    if (!container) {
+      return;
+    }
+
+    if (shouldAutoScrollAgentMessagesRef.current) {
+      container.scrollTop = container.scrollHeight;
+    }
+  }, [agentMessages, isAgentLoading]);
 
   const getCurrentUserId = useCallback(async () => {
     const { data, error: userError } = await supabase.auth.getUser();
@@ -3339,10 +3363,14 @@ export default function NetworkGraph() {
     try {
       const recentHistory = [...agentMessages, { role: "user", text: question }].slice(-10);
 
+      setAgentMessages((current) => [...current, { role: "assistant", text: "" }]);
+
       const response = await fetch("/api/social-agent", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          task: "chat",
+          stream: true,
           question,
           graphData,
           messageHistory: recentHistory,
@@ -3354,19 +3382,70 @@ export default function NetworkGraph() {
         throw new Error(errorText || "Server agent unavailable");
       }
 
-      const data = (await response.json()) as { answer?: string };
-      const answer = data.answer?.trim();
-      if (!answer) {
+      if (!response.body) {
+        throw new Error("No response stream available.");
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let answer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          break;
+        }
+
+        answer += decoder.decode(value, { stream: true });
+        const streamedText = answer;
+        setAgentMessages((current) => {
+          const updated = [...current];
+          for (let index = updated.length - 1; index >= 0; index -= 1) {
+            if (updated[index]?.role === "assistant") {
+              updated[index] = {
+                ...updated[index],
+                text: streamedText,
+              };
+              break;
+            }
+          }
+          return updated;
+        });
+      }
+
+      answer += decoder.decode();
+      const finalAnswer = answer.trim();
+      if (!finalAnswer) {
         throw new Error("Empty answer");
       }
 
-      setAgentMessages((current) => [...current, { role: "assistant", text: answer }]);
+      setAgentMessages((current) => {
+        const updated = [...current];
+        for (let index = updated.length - 1; index >= 0; index -= 1) {
+          if (updated[index]?.role === "assistant") {
+            updated[index] = {
+              ...updated[index],
+              text: finalAnswer,
+            };
+            break;
+          }
+        }
+        return updated;
+      });
     } catch (error) {
       const errorMessage =
         error instanceof Error
           ? error.message
           : "Backend agent failed. Check that the dev server was restarted after editing .env.local and that GEMINI_API_KEY is valid.";
       setAgentError(errorMessage);
+      setAgentMessages((current) => {
+        const updated = [...current];
+        const lastMessage = updated[updated.length - 1];
+        if (lastMessage?.role === "assistant" && !lastMessage.text.trim()) {
+          updated.pop();
+        }
+        return updated;
+      });
       const fallback = getGraphInsightsAnswer(question);
       setAgentMessages((current) => [
         ...current,
@@ -4678,7 +4757,11 @@ export default function NetworkGraph() {
                       </div>
                     ) : null}
 
-                    <div className="flex-1 overflow-y-auto p-3 space-y-2">
+                    <div
+                      ref={agentMessagesScrollRef}
+                      onScroll={handleAgentMessagesScroll}
+                      className="flex-1 overflow-y-auto p-3 space-y-2"
+                    >
                       {agentMessages.map((message, index) => (
                         <div
                           key={`${message.role}-${index}`}
@@ -4691,6 +4774,42 @@ export default function NetworkGraph() {
                           {renderMessageText(message.text)}
                         </div>
                       ))}
+
+                      {isAgentLoading ? (
+                        <div
+                          aria-live="polite"
+                          className="mr-6 rounded bg-slate-100 text-slate-700 p-2 text-sm"
+                        >
+                          <div className="flex items-center gap-2">
+                            <svg
+                              className="h-4 w-4 animate-spin text-violet-600"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              aria-hidden="true"
+                            >
+                              <circle
+                                className="opacity-25"
+                                cx="12"
+                                cy="12"
+                                r="10"
+                                stroke="currentColor"
+                                strokeWidth="4"
+                              />
+                              <path
+                                className="opacity-75"
+                                fill="currentColor"
+                                d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+                              />
+                            </svg>
+                            <span className="inline-flex items-center gap-0.5">
+                              Thinking
+                              <span className="inline-flex w-6 justify-start">
+                                <span className="animate-pulse">...</span>
+                              </span>
+                            </span>
+                          </div>
+                        </div>
+                      ) : null}
                     </div>
 
                     <div className="p-3 border-t border-slate-200 space-y-2">
@@ -4706,7 +4825,7 @@ export default function NetworkGraph() {
                           void handleAskAgent();
                         }}
                         disabled={isAgentLoading}
-                        className="w-full px-4 py-2 bg-violet-600 text-white rounded hover:bg-violet-700"
+                        className="w-full px-4 py-2 bg-violet-600 text-white rounded hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-70"
                       >
                         {isAgentLoading ? "Thinking..." : "Ask Agent"}
                       </button>
