@@ -2808,7 +2808,9 @@ export default function NetworkGraph() {
     let eventNamePart = "";
     let attendeePart = "";
 
-    const soFarMatch = normalized.match(/^(.*?)(?:,?\s*)so far\s+(.+?)\s+(?:is|are)\s+going/i);
+    const soFarMatch = normalized.match(
+      /^(.*?)(?:,?\s*)(?:so far|currently|as of now)\s+(.+?)\s+(?:is|are)\s+(?:going|coming|attending|joining)/i
+    );
     if (soFarMatch) {
       eventNamePart = soFarMatch[1]?.trim() ?? "";
       attendeePart = soFarMatch[2]?.trim() ?? "";
@@ -2836,14 +2838,24 @@ export default function NetworkGraph() {
       .replace(/^i'?m planning( a| an)?\s+/i, "")
       .replace(/^we are planning( a| an)?\s+/i, "")
       .replace(/^we'?re planning( a| an)?\s+/i, "")
-      .replace(/\s+and$/i, "")
+      .replace(/[\s,]+and$/i, "")
       .replace(/\s+(would look like|looks like|look like)$/i, "")
       .replace(/\s+event$/i, "")
+      .replace(/[,:;.!?]+$/g, "")
       .trim();
 
     const eventName = eventNamePart || "New Event";
 
-    const attendeeNames = attendeePart
+    const cleanedAttendeePart = attendeePart
+      .replace(/^(?:i|we)\s+know\s+that\s+/i, "")
+      .replace(/^(?:i|we)\s+know\s+/i, "")
+      .replace(/^(?:i\s+know\s+that\s+)?(?:so far\s+)?(?:it(?:'s| is)\s+)?(?:just\s+)?/i, "")
+      .replace(/^(?:there(?:'s| are)\s+)?(?:currently\s+)?/i, "")
+      .replace(/^(?:the\s+people\s+going\s+are\s+|the\s+people\s+coming\s+are\s+)/i, "")
+      .replace(/\s+(?:is|are)\s+(?:going|coming|attending|joining)\b.*$/i, "")
+      .trim();
+
+    const attendeeNames = cleanedAttendeePart
       .replace(/[.?!]$/g, "")
       .split(/,|\band\b/i)
       .map((name) => name.trim().replace(/^and\s+/i, ""))
@@ -2855,6 +2867,69 @@ export default function NetworkGraph() {
     }
 
     return { eventName, attendeeNames };
+  };
+
+  const isLikelyEventIntentQuestion = (question: string) => {
+    const lower = question.replace(/\s+/g, " ").trim().toLowerCase();
+    const markers = [
+      "show me",
+      "create",
+      "make",
+      "plan",
+      "event",
+      "party",
+      "dinner",
+      "trip",
+      "going",
+      "coming",
+      "attending",
+      "joining",
+    ];
+
+    return markers.some((marker) => lower.includes(marker));
+  };
+
+  const extractEventIntentWithAgent = async (question: string) => {
+    try {
+      const response = await fetch("/api/social-agent", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          task: "extract-event-intent",
+          question,
+          graphData,
+        }),
+      });
+
+      if (!response.ok) {
+        return null;
+      }
+
+      const data = (await response.json()) as {
+        eventIntent?: {
+          eventName?: string;
+          attendeeNames?: string[];
+        } | null;
+      };
+
+      const eventName = data.eventIntent?.eventName?.trim() ?? "";
+      const attendeeNames = (data.eventIntent?.attendeeNames ?? [])
+        .map((name) => name.trim())
+        .filter(Boolean)
+        .filter(
+          (name, index, names) =>
+            names.findIndex((candidate) => normalizePersonName(candidate) === normalizePersonName(name)) ===
+            index
+        );
+
+      if (!eventName || attendeeNames.length === 0) {
+        return null;
+      }
+
+      return { eventName, attendeeNames };
+    } catch {
+      return null;
+    }
   };
 
   const createEventFromPromptIntent = async (eventName: string, attendeeNames: string[]) => {
@@ -3168,7 +3243,16 @@ export default function NetworkGraph() {
       setAgentQuestion("");
     }
 
-    const eventIntent = parseEventIntent(question);
+    let eventIntent = null as ReturnType<typeof parseEventIntent>;
+
+    if (isLikelyEventIntentQuestion(question)) {
+      eventIntent = await extractEventIntentWithAgent(question);
+    }
+
+    if (!eventIntent) {
+      eventIntent = parseEventIntent(question);
+    }
+
     if (eventIntent) {
       const shouldSuggestMore =
         /who else|anyone else|who should .*add|could i add|what else should/i.test(question);
