@@ -113,24 +113,65 @@ Notes:
 - Use row-level security so users can only read/write events where `user_id = auth.uid()`.
 - If `planned_events`/`events` is missing, the app falls back to browser-local storage for events.
 
-## Apply migration
+## Run database setup SQL
 
-To add group persistence schema and RLS, run the SQL migration:
+Use this single script to create the core app tables, indexes, and RLS policies:
 
-- `supabase/migrations/20260408_add_groups_and_group_memberships.sql`
+- `supabase/sql/interaction_network_setup.sql`
 
-You can apply it in either of these ways:
+How to apply:
 
-- Supabase Dashboard → SQL Editor → paste/run migration SQL.
-- Supabase CLI (if configured): `supabase db push`.
+- Supabase Dashboard → SQL Editor → paste and run the script.
 
-If you already ran the first groups migration and see this error when assigning a person to a group:
+After running the script:
 
-- `new row violates row-level security policy for table "group_memberships"`
+- Update the seeded row in `public.approver_emails` to your real approver email(s), or add rows manually.
 
-Run this follow-up migration:
+### SQL Editor quick start checklist
 
-- `supabase/migrations/20260408_fix_group_memberships_rls_shared_nodes.sql`
+1. Open Supabase Dashboard → **SQL Editor**.
+2. Open `supabase/sql/interaction_network_setup.sql`, copy all content, and paste it into SQL Editor.
+3. Replace the placeholder approver email in the final `insert into public.approver_emails ...` statement.
+4. Click **Run** and confirm it completes without errors.
+5. Run these verification queries:
+
+```sql
+select table_name
+from information_schema.tables
+where table_schema = 'public'
+	and table_name in (
+		'nodes',
+		'links',
+		'groups',
+		'group_memberships',
+		'planned_events',
+		'signup_requests',
+		'approver_emails'
+	)
+order by table_name;
+```
+
+```sql
+select email, created_at
+from public.approver_emails
+order by created_at desc;
+```
+
+```sql
+select tablename, policyname
+from pg_policies
+where schemaname = 'public'
+	and tablename in (
+		'nodes',
+		'links',
+		'groups',
+		'group_memberships',
+		'planned_events',
+		'signup_requests',
+		'approver_emails'
+	)
+order by tablename, policyname;
+```
 
 ## Authentication and invite flow
 
