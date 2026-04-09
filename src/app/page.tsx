@@ -3686,53 +3686,54 @@ export default function NetworkGraph() {
             </select>
           </label>
 
-          <button
-            type="button"
-            onClick={handleOpenCreateGroupForm}
-            disabled={!currentUserId || isSaving}
-            className="rounded bg-slate-800 px-3 py-1.5 text-sm text-white hover:bg-slate-900 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            + Add Group
-          </button>
-
         </div>
       </section>
 
       <section className="px-4 py-2 border-0 bg-transparent flex flex-wrap items-center gap-2">
-        {groupCounts.length === 0 ? (
-          <p className="text-xs text-slate-500">No groups yet. Right-click a person and choose Edit Groups.</p>
-        ) : (
-          groupCounts.map(({ group, count }) => (
-            <button
-              key={group.id}
-              type="button"
-              onClick={() => setSelectedGroupId((current) => (current === group.id ? "" : group.id))}
-              onContextMenu={(event) => {
-                setSelectedGroupId(group.id);
-                openContextMenu(
-                  {
-                    kind: "group",
-                    group: {
-                      id: group.id,
-                      name: group.name,
-                    },
+        <button
+          type="button"
+          onClick={handleOpenCreateGroupForm}
+          disabled={!currentUserId || isSaving}
+          className="inline-flex items-center gap-1.5 rounded-full border border-slate-300 bg-white px-3 py-1 text-xs text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+          title="Add group"
+        >
+          <span aria-hidden>+</span>
+          Add Group
+        </button>
+
+        {groupCounts.map(({ group, count }) => (
+          <button
+            key={group.id}
+            type="button"
+            onClick={() => setSelectedGroupId((current) => (current === group.id ? "" : group.id))}
+            onContextMenu={(event) => {
+              setSelectedGroupId(group.id);
+              openContextMenu(
+                {
+                  kind: "group",
+                  group: {
+                    id: group.id,
+                    name: group.name,
                   },
-                  event as unknown as MouseEvent
-                );
-              }}
-              className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs ${
-                selectedGroupId === group.id ? "border-slate-700 bg-slate-100" : "border-slate-200 bg-white"
-              }`}
-              title={`${group.name}: ${count}`}
-            >
-              <span
-                className="inline-block h-2.5 w-2.5 rounded-full"
-                style={{ backgroundColor: group.color }}
-              />
-              {group.name} ({count})
-            </button>
-          ))
-        )}
+                },
+                event as unknown as MouseEvent
+              );
+            }}
+            className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs ${
+              selectedGroupId === group.id ? "border-slate-700 bg-slate-100" : "border-slate-200 bg-white"
+            }`}
+            title={`${group.name}: ${count}`}
+          >
+            <span
+              className="inline-block h-2.5 w-2.5 rounded-full"
+              style={{ backgroundColor: group.color }}
+            />
+            {group.name} ({count})
+          </button>
+        ))}
+        {groupCounts.length === 0 ? (
+          <p className="text-xs text-slate-500">No groups yet. Add one to get started.</p>
+        ) : null}
         {groupCounts.length > 0 ? (
           <p className="text-xs text-slate-500">Click a group to select it. Click again to clear.</p>
         ) : null}
