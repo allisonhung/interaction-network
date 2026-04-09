@@ -424,6 +424,24 @@ export default function NetworkGraph() {
     return groups.map((group) => ({ group, count: countsByGroupId.get(group.id) ?? 0 }));
   }, [groups, nodeGroupIdsByNodeId]);
 
+  const alphabetizedGroupNodes = useMemo(() => {
+    return [...graphData.nodes].sort((leftNode, rightNode) => {
+      const nameComparison = leftNode.name.localeCompare(rightNode.name, undefined, {
+        sensitivity: "base",
+        numeric: true,
+      });
+
+      if (nameComparison !== 0) {
+        return nameComparison;
+      }
+
+      return leftNode.id.localeCompare(rightNode.id, undefined, {
+        sensitivity: "base",
+        numeric: true,
+      });
+    });
+  }, [graphData.nodes]);
+
   const visibleGraphData = useMemo(
     () => ({
       nodes: graphData.nodes,
@@ -3849,7 +3867,9 @@ export default function NetworkGraph() {
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
-                    onClick={() => setNewGroupSelectedNodeIds(graphData.nodes.map((node) => node.id))}
+                    onClick={() =>
+                      setNewGroupSelectedNodeIds(alphabetizedGroupNodes.map((node) => node.id))
+                    }
                     className="rounded bg-slate-100 px-2 py-1 text-xs text-slate-700 hover:bg-slate-200"
                   >
                     Select all
@@ -3865,10 +3885,10 @@ export default function NetworkGraph() {
               </div>
 
               <div className="max-h-64 space-y-2 overflow-y-auto rounded border border-slate-200 bg-slate-50 p-3">
-                {graphData.nodes.length === 0 ? (
+                {alphabetizedGroupNodes.length === 0 ? (
                   <p className="text-sm text-slate-500">No people available yet.</p>
                 ) : (
-                  graphData.nodes.map((node) => (
+                  alphabetizedGroupNodes.map((node) => (
                     <label key={node.id} className="flex items-center gap-2 text-sm text-slate-700">
                       <input
                         type="checkbox"
@@ -3944,7 +3964,9 @@ export default function NetworkGraph() {
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
-                    onClick={() => setNewGroupSelectedNodeIds(graphData.nodes.map((node) => node.id))}
+                    onClick={() =>
+                      setNewGroupSelectedNodeIds(alphabetizedGroupNodes.map((node) => node.id))
+                    }
                     className="rounded bg-slate-100 px-2 py-1 text-xs text-slate-700 hover:bg-slate-200"
                   >
                     Select all
@@ -3960,10 +3982,10 @@ export default function NetworkGraph() {
               </div>
 
               <div className="max-h-64 space-y-2 overflow-y-auto rounded border border-slate-200 bg-slate-50 p-3">
-                {graphData.nodes.length === 0 ? (
+                {alphabetizedGroupNodes.length === 0 ? (
                   <p className="text-sm text-slate-500">No people available yet.</p>
                 ) : (
-                  graphData.nodes.map((node) => (
+                  alphabetizedGroupNodes.map((node) => (
                     <label key={node.id} className="flex items-center gap-2 text-sm text-slate-700">
                       <input
                         type="checkbox"
