@@ -181,6 +181,7 @@ const EXAMPLE_PROMPTS = [
 ];
 
 export default function NetworkGraph() {
+  const topHeaderRef = useRef<HTMLElement | null>(null);
   const graphRef = useRef<
     ForceGraphMethods<NodeObject, LinkObject> | undefined
   >(undefined);
@@ -223,6 +224,7 @@ export default function NetworkGraph() {
   const [requestLastName, setRequestLastName] = useState("");
   const [requestEmail, setRequestEmail] = useState("");
   const [pendingRequests, setPendingRequests] = useState<SignupRequest[]>([]);
+  const [isApprover, setIsApprover] = useState(false);
   const [isLoadingPendingRequests, setIsLoadingPendingRequests] = useState(false);
   const [isApprovingRequestId, setIsApprovingRequestId] = useState<string | null>(null);
   const [isDenyingRequestId, setIsDenyingRequestId] = useState<string | null>(null);
@@ -247,6 +249,7 @@ export default function NetworkGraph() {
   const [agentQuestion, setAgentQuestion] = useState("");
   const [isAgentLoading, setIsAgentLoading] = useState(false);
   const [agentError, setAgentError] = useState<string | null>(null);
+  const [rightPanelTop, setRightPanelTop] = useState(88);
   const [agentMessages, setAgentMessages] = useState<AgentMessage[]>([
     {
       role: "assistant",
@@ -1326,13 +1329,44 @@ export default function NetworkGraph() {
     setSignInEmail("");
     setSignInPassword("");
     setAuthMessage(null);
-    await fetchGraphData();
-    await loadPendingRequests();
+    await fetchGraphData(userId);
     setIsSigningIn(false);
   };
 
-  const loadPendingRequests = useCallback(async () => {
+  const loadApproverStatus = useCallback(async () => {
     if (!currentUserId) {
+      setIsApprover(false);
+      return;
+    }
+
+    const {
+      data: { session },
+      error: sessionError,
+    } = await supabase.auth.getSession();
+
+    if (sessionError || !session?.access_token) {
+      setIsApprover(false);
+      return;
+    }
+
+    const response = await fetch("/api/admin/approver-status", {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${session.access_token}`,
+      },
+    });
+
+    if (!response.ok) {
+      setIsApprover(false);
+      return;
+    }
+
+    const data = (await response.json()) as { isApprover?: boolean };
+    setIsApprover(Boolean(data.isApprover));
+  }, [currentUserId]);
+
+  const loadPendingRequests = useCallback(async () => {
+    if (!currentUserId || !isApprover) {
       setPendingRequests([]);
       return;
     }
@@ -1351,7 +1385,6 @@ export default function NetworkGraph() {
         return;
       }
 
-      setError(requestResult.error.message);
       setPendingRequests([]);
       setIsLoadingPendingRequests(false);
       return;
@@ -1370,7 +1403,7 @@ export default function NetworkGraph() {
 
     setPendingRequests(normalized);
     setIsLoadingPendingRequests(false);
-  }, [currentUserId]);
+  }, [currentUserId, isApprover]);
 
   const handleApproveRequest = async (requestId: string, email: string) => {
     if (!currentUserId) {
@@ -1552,6 +1585,7 @@ export default function NetworkGraph() {
     setRequestLastName("");
     setRequestEmail("");
     setPendingRequests([]);
+    setIsApprover(false);
     setPlannedEvents([]);
     setSelectedEventId(null);
     setEditingEventId(null);
@@ -3451,13 +3485,27 @@ export default function NetworkGraph() {
 
   useEffect(() => {
     if (!currentUserId) {
+      setIsApprover(false);
+      return;
+    }
+
+    void loadApproverStatus();
+  }, [currentUserId, loadApproverStatus]);
+
+  useEffect(() => {
+    if (!currentUserId) {
       setPendingRequests([]);
       setPlannedEvents([]);
       return;
     }
 
+    if (!isApprover) {
+      setPendingRequests([]);
+      return;
+    }
+
     void loadPendingRequests();
-  }, [currentUserId, loadPendingRequests]);
+  }, [currentUserId, isApprover, loadPendingRequests]);
 
   useEffect(() => {
     if (!currentUserId) {
@@ -3469,7 +3517,7 @@ export default function NetworkGraph() {
   }, [currentUserId, loadPlannedEvents]);
 
   useEffect(() => {
-    if (!currentUserId) {
+    if (!currentUserId || !isApprover) {
       return;
     }
 
@@ -3480,7 +3528,7 @@ export default function NetworkGraph() {
     return () => {
       window.clearInterval(intervalId);
     };
-  }, [currentUserId, loadPendingRequests]);
+  }, [currentUserId, isApprover, loadPendingRequests]);
 
   useEffect(() => {
     if (!selectedEventId) {
@@ -3497,6 +3545,34 @@ export default function NetworkGraph() {
     };
   }, [selectedEventId, activeGraphData]);
 
+  useEffect(() => {
+    const updateRightPanelTop = () => {
+      const headerBottom = topHeaderRef.current?.getBoundingClientRect().bottom;
+      if (typeof headerBottom === "number") {
+        setRightPanelTop(Math.max(0, Math.round(headerBottom)));
+      }
+    };
+
+    updateRightPanelTop();
+
+    const headerElement = topHeaderRef.current;
+    let resizeObserver: ResizeObserver | null = null;
+
+    if (headerElement && typeof ResizeObserver !== "undefined") {
+      resizeObserver = new ResizeObserver(() => {
+        updateRightPanelTop();
+      });
+      resizeObserver.observe(headerElement);
+    }
+
+    window.addEventListener("resize", updateRightPanelTop);
+
+    return () => {
+      window.removeEventListener("resize", updateRightPanelTop);
+      resizeObserver?.disconnect();
+    };
+  }, []);
+
   if (!hasMounted) {
     return (
       <main className="flex h-screen w-screen items-center justify-center bg-slate-50 text-slate-500">
@@ -3508,7 +3584,7 @@ export default function NetworkGraph() {
   return (
     <main className="flex h-screen w-screen flex-col bg-slate-50">
       {/* Header / Control Panel Area */}
-      <header className="p-4 bg-white shadow-md z-10 flex justify-between items-center">
+      <header ref={topHeaderRef} className="p-4 bg-white shadow-md z-10 flex justify-between items-center">
         <div>
           <h1 className="text-xl font-bold text-slate-800">Interactions Network</h1>
           {isLoading ? <p className="text-sm text-slate-500">Loading graph data...</p> : null}
@@ -4053,79 +4129,6 @@ export default function NetworkGraph() {
         </div>
       ) : null}
 
-      {currentUserId ? (
-        <div className="fixed bottom-4 left-4 w-96 z-20 rounded border border-slate-300 bg-white shadow-lg flex flex-col">
-          <div className="flex items-center justify-between gap-2 bg-slate-100 px-4 py-2 border-b border-slate-300 rounded-t">
-            <h3 className="text-sm font-semibold text-slate-800">Pending Requests ({pendingRequests.length})</h3>
-            <button
-              onClick={() => setIsApprovalsMinimized(!isApprovalsMinimized)}
-              className="px-2 py-1 text-xs bg-slate-200 rounded hover:bg-slate-300"
-            >
-              {isApprovalsMinimized ? "▲" : "▼"}
-            </button>
-          </div>
-
-          {!isApprovalsMinimized ? (
-            <>
-              <div className="max-h-80 overflow-y-auto p-3 space-y-2">
-                {pendingRequests.length === 0 ? (
-                  <p className="text-sm text-slate-500">No pending requests.</p>
-                ) : (
-                  pendingRequests.map((request) => {
-                    const displayName = [request.firstName, request.lastName]
-                      .filter(Boolean)
-                      .join(" ");
-                    const isApproving = isApprovingRequestId === request.id;
-                    const isDenying = isDenyingRequestId === request.id;
-
-                    return (
-                      <div
-                        key={request.id}
-                        className="rounded border border-slate-200 bg-slate-50 px-3 py-2"
-                      >
-                        <p className="text-xs font-medium text-slate-800">
-                          {displayName || "No name"}
-                        </p>
-                        <p className="text-xs text-slate-600">{request.email}</p>
-                        <div className="mt-2 flex gap-2">
-                          <button
-                            onClick={() => {
-                              void handleApproveRequest(request.id, request.email);
-                            }}
-                            disabled={isApproving || isDenying}
-                            className="flex-1 px-2 py-1 text-xs bg-emerald-600 text-white rounded hover:bg-emerald-700 disabled:opacity-60 disabled:cursor-not-allowed"
-                          >
-                            {isApproving ? "..." : "Approve"}
-                          </button>
-                          <button
-                            onClick={() => {
-                              void handleDenyRequest(request.id);
-                            }}
-                            disabled={isDenying || isApproving}
-                            className="flex-1 px-2 py-1 text-xs bg-red-600 text-white rounded hover:bg-red-700 disabled:opacity-60 disabled:cursor-not-allowed"
-                          >
-                            {isDenying ? "..." : "Deny"}
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })
-                )}
-              </div>
-              <button
-                onClick={() => {
-                  void loadPendingRequests();
-                }}
-                disabled={isLoadingPendingRequests}
-                className="w-full px-3 py-1.5 text-xs bg-slate-200 text-slate-700 rounded-b hover:bg-slate-300 disabled:opacity-60 disabled:cursor-not-allowed"
-              >
-                {isLoadingPendingRequests ? "Refreshing..." : "Refresh"}
-              </button>
-            </>
-          ) : null}
-        </div>
-      ) : null}
-
       {showConnectionForm ? (
         <section className="p-4 bg-white border-t border-slate-200">
           <div className="flex flex-wrap items-end gap-3">
@@ -4184,7 +4187,7 @@ export default function NetworkGraph() {
       ) : null}
 
       {/* Graph + Agent Area */}
-      <div className="flex-grow overflow-hidden flex">
+      <div className={`flex-grow overflow-hidden flex ${currentUserId ? "pr-96" : ""}`}>
         <div ref={graphAreaRef} className="flex-1 overflow-hidden relative">
           {selectedEvent ? (
             <div className="absolute left-3 top-3 z-10 rounded border border-slate-200 bg-white/95 px-3 py-2 shadow-sm backdrop-blur-sm">
@@ -4339,7 +4342,10 @@ export default function NetworkGraph() {
         </div>
 
         {currentUserId ? (
-          <aside className="w-96 border-l border-slate-200 bg-white flex flex-col">
+          <aside
+            style={{ top: rightPanelTop }}
+            className="fixed right-0 bottom-0 z-20 w-96 border-l border-slate-200 bg-white shadow-lg flex flex-col"
+          >
             <div className="flex items-start justify-between gap-2 border-b border-slate-200 p-3">
               <div>
                 <h2 className="font-semibold text-slate-800">Planning Hub</h2>
@@ -4630,6 +4636,79 @@ export default function NetworkGraph() {
                   </div>
                 )}
               </>
+            ) : null}
+
+            {isApprover ? (
+              <section className="border-t border-slate-200 bg-white">
+                <div className="flex items-center justify-between gap-2 bg-slate-100 px-4 py-2 border-b border-slate-300">
+                  <h3 className="text-sm font-semibold text-slate-800">Pending Requests ({pendingRequests.length})</h3>
+                  <button
+                    onClick={() => setIsApprovalsMinimized(!isApprovalsMinimized)}
+                    className="px-2 py-1 text-xs bg-slate-200 rounded hover:bg-slate-300"
+                  >
+                    {isApprovalsMinimized ? "▲" : "▼"}
+                  </button>
+                </div>
+
+                {!isApprovalsMinimized ? (
+                  <>
+                    <div className="max-h-60 overflow-y-auto p-3 space-y-2">
+                      {pendingRequests.length === 0 ? (
+                        <p className="text-sm text-slate-500">No pending requests.</p>
+                      ) : (
+                        pendingRequests.map((request) => {
+                          const displayName = [request.firstName, request.lastName]
+                            .filter(Boolean)
+                            .join(" ");
+                          const isApproving = isApprovingRequestId === request.id;
+                          const isDenying = isDenyingRequestId === request.id;
+
+                          return (
+                            <div
+                              key={request.id}
+                              className="rounded border border-slate-200 bg-slate-50 px-3 py-2"
+                            >
+                              <p className="text-xs font-medium text-slate-800">
+                                {displayName || "No name"}
+                              </p>
+                              <p className="text-xs text-slate-600">{request.email}</p>
+                              <div className="mt-2 flex gap-2">
+                                <button
+                                  onClick={() => {
+                                    void handleApproveRequest(request.id, request.email);
+                                  }}
+                                  disabled={isApproving || isDenying}
+                                  className="flex-1 px-2 py-1 text-xs bg-emerald-600 text-white rounded hover:bg-emerald-700 disabled:opacity-60 disabled:cursor-not-allowed"
+                                >
+                                  {isApproving ? "..." : "Approve"}
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    void handleDenyRequest(request.id);
+                                  }}
+                                  disabled={isDenying || isApproving}
+                                  className="flex-1 px-2 py-1 text-xs bg-red-600 text-white rounded hover:bg-red-700 disabled:opacity-60 disabled:cursor-not-allowed"
+                                >
+                                  {isDenying ? "..." : "Deny"}
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                    <button
+                      onClick={() => {
+                        void loadPendingRequests();
+                      }}
+                      disabled={isLoadingPendingRequests}
+                      className="w-full px-3 py-1.5 text-xs bg-slate-200 text-slate-700 hover:bg-slate-300 disabled:opacity-60 disabled:cursor-not-allowed"
+                    >
+                      {isLoadingPendingRequests ? "Refreshing..." : "Refresh"}
+                    </button>
+                  </>
+                ) : null}
+              </section>
             ) : null}
           </aside>
         ) : null}
