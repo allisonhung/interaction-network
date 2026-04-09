@@ -101,6 +101,13 @@ type ContextMenuTarget =
       };
     }
   | {
+      kind: "group";
+      group: {
+        id: string;
+        name: string;
+      };
+    }
+  | {
       kind: "connection";
       link: {
         id?: string;
@@ -1593,18 +1600,20 @@ export default function NetworkGraph() {
     setShowCreateGroupForm(true);
   };
 
-  const handleOpenEditGroupForm = () => {
+  const handleOpenEditGroupForm = (groupId?: string) => {
     if (!currentUserId) {
       setError("You must be signed in before editing groups.");
       return;
     }
 
-    if (!selectedGroupId) {
+    const targetGroupId = groupId ?? selectedGroupId;
+
+    if (!targetGroupId) {
       setCreateGroupError("Choose a group to edit.");
       return;
     }
 
-    const targetGroup = groups.find((group) => group.id === selectedGroupId);
+    const targetGroup = groups.find((group) => group.id === targetGroupId);
     if (!targetGroup) {
       setCreateGroupError("Unable to find the selected group.");
       return;
@@ -2395,6 +2404,11 @@ export default function NetworkGraph() {
 
     if (target.kind === "node") {
       await editNodeName(target.node);
+      return;
+    }
+
+    if (target.kind === "group") {
+      handleOpenEditGroupForm(target.group.id);
       return;
     }
 
@@ -3693,14 +3707,6 @@ export default function NetworkGraph() {
             + Add Group
           </button>
 
-          <button
-            type="button"
-            onClick={handleOpenEditGroupForm}
-            disabled={!currentUserId || !selectedGroupId || isSaving}
-            className="rounded bg-slate-700 px-3 py-1.5 text-sm text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            Edit Group
-          </button>
         </div>
       </section>
 
@@ -3713,6 +3719,19 @@ export default function NetworkGraph() {
               key={group.id}
               type="button"
               onClick={() => setSelectedGroupId(group.id)}
+              onContextMenu={(event) => {
+                setSelectedGroupId(group.id);
+                openContextMenu(
+                  {
+                    kind: "group",
+                    group: {
+                      id: group.id,
+                      name: group.name,
+                    },
+                  },
+                  event as unknown as MouseEvent
+                );
+              }}
               className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs ${
                 selectedGroupId === group.id ? "border-slate-700 bg-slate-100" : "border-slate-200 bg-white"
               }`}
@@ -4265,16 +4284,27 @@ export default function NetworkGraph() {
               className="absolute z-20 min-w-44 rounded border border-slate-300 bg-white shadow-lg p-1"
               onClick={(event) => event.stopPropagation()}
             >
-              <button
-                onClick={() => {
-                  void handleContextMenuDelete();
-                }}
-                className="w-full text-left px-3 py-2 text-sm rounded hover:bg-slate-100"
-              >
-                {contextMenu.target.kind === "node" ? "Delete Node" : "Delete Connection"}
-              </button>
-              {contextMenu.target.kind === "node" ? (
+              {contextMenu.target.kind === "group" ? (
                 <>
+                  <button
+                    onClick={() => {
+                      void handleContextMenuEdit();
+                    }}
+                    className="w-full text-left px-3 py-2 text-sm rounded hover:bg-slate-100"
+                  >
+                    Edit Group
+                  </button>
+                </>
+              ) : contextMenu.target.kind === "node" ? (
+                <>
+                  <button
+                    onClick={() => {
+                      void handleContextMenuDelete();
+                    }}
+                    className="w-full text-left px-3 py-2 text-sm rounded hover:bg-slate-100"
+                  >
+                    Delete Node
+                  </button>
                   <button
                     onClick={() => {
                       void handleContextMenuEdit();
@@ -4293,14 +4323,24 @@ export default function NetworkGraph() {
                   </button>
                 </>
               ) : (
-                <button
-                  onClick={() => {
-                    void handleContextMenuEdit();
-                  }}
-                  className="w-full text-left px-3 py-2 text-sm rounded hover:bg-slate-100"
-                >
-                  Edit Type
-                </button>
+                <>
+                  <button
+                    onClick={() => {
+                      void handleContextMenuDelete();
+                    }}
+                    className="w-full text-left px-3 py-2 text-sm rounded hover:bg-slate-100"
+                  >
+                    Delete Connection
+                  </button>
+                  <button
+                    onClick={() => {
+                      void handleContextMenuEdit();
+                    }}
+                    className="w-full text-left px-3 py-2 text-sm rounded hover:bg-slate-100"
+                  >
+                    Edit Type
+                  </button>
+                </>
               )}
             </div>
           ) : null}
