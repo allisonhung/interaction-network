@@ -198,7 +198,7 @@ export default function NetworkGraph() {
   const [includeLovers, setIncludeLovers] = useState(true);
   const [includeFamily, setIncludeFamily] = useState(true);
   const [groupViewMode, setGroupViewMode] = useState<"all" | "highlight" | "only">("all");
-  const [selectedGroupId, setSelectedGroupId] = useState("");
+  const [selectedGroupIds, setSelectedGroupIds] = useState<string[]>([]);
   const [groups, setGroups] = useState<Group[]>([]);
   const [nodeGroupIdsByNodeId, setNodeGroupIdsByNodeId] = useState<Record<string, string[]>>({});
   const [groupTable, setGroupTable] = useState<string | null>(null);
@@ -392,10 +392,7 @@ export default function NetworkGraph() {
     ]
   );
 
-  const selectedGroup = useMemo(
-    () => groups.find((group) => group.id === selectedGroupId) ?? null,
-    [groups, selectedGroupId]
-  );
+  const selectedGroupIdSet = useMemo(() => new Set(selectedGroupIds), [selectedGroupIds]);
 
   const groupById = useMemo(() => {
     return new Map(groups.map((group) => [group.id, group]));
@@ -403,13 +400,13 @@ export default function NetworkGraph() {
 
   const isNodeInSelectedGroup = useCallback(
     (nodeId: string) => {
-      if (!selectedGroupId) {
+      if (selectedGroupIdSet.size === 0) {
         return false;
       }
 
-      return (nodeGroupIdsByNodeId[nodeId] ?? []).includes(selectedGroupId);
+      return (nodeGroupIdsByNodeId[nodeId] ?? []).some((groupId) => selectedGroupIdSet.has(groupId));
     },
-    [nodeGroupIdsByNodeId, selectedGroupId]
+    [nodeGroupIdsByNodeId, selectedGroupIdSet]
   );
 
   const groupCounts = useMemo(() => {
@@ -451,13 +448,13 @@ export default function NetworkGraph() {
   );
 
   const groupFilteredGraphData = useMemo(() => {
-    if (groupViewMode !== "only" || !selectedGroup) {
+    if (groupViewMode !== "only" || selectedGroupIdSet.size === 0) {
       return visibleGraphData;
     }
 
     const includedNodeIds = new Set(
       visibleGraphData.nodes
-        .filter((node) => (nodeGroupIdsByNodeId[node.id] ?? []).includes(selectedGroup.id))
+        .filter((node) => (nodeGroupIdsByNodeId[node.id] ?? []).some((groupId) => selectedGroupIdSet.has(groupId)))
         .map((node) => node.id)
     );
 
@@ -474,7 +471,7 @@ export default function NetworkGraph() {
         return includedNodeIds.has(source) && includedNodeIds.has(target);
       }),
     };
-  }, [groupViewMode, nodeGroupIdsByNodeId, selectedGroup, visibleGraphData]);
+  }, [groupViewMode, nodeGroupIdsByNodeId, selectedGroupIdSet, visibleGraphData]);
 
   const selectedEvent = useMemo(
     () => plannedEvents.find((event) => event.id === selectedEventId) ?? null,
@@ -537,7 +534,7 @@ export default function NetworkGraph() {
     (node: NodeObject) => {
       const baseColor = typeof node.color === "string" && node.color ? node.color : "#3b82f6";
 
-      if (selectedEvent || groupViewMode !== "highlight" || !selectedGroup) {
+      if (selectedEvent || groupViewMode !== "highlight" || selectedGroupIdSet.size === 0) {
         return baseColor;
       }
 
@@ -548,14 +545,14 @@ export default function NetworkGraph() {
 
       return "#cbd5e1";
     },
-    [groupViewMode, isNodeInSelectedGroup, selectedEvent, selectedGroup]
+    [groupViewMode, isNodeInSelectedGroup, selectedEvent, selectedGroupIdSet]
   );
 
   const getRenderedLinkColor = useCallback(
     (link: LinkObject) => {
       const baseColor = typeof link.color === "string" && link.color ? link.color : "#94a3b8";
 
-      if (selectedEvent || groupViewMode !== "highlight" || !selectedGroup) {
+      if (selectedEvent || groupViewMode !== "highlight" || selectedGroupIdSet.size === 0) {
         return baseColor;
       }
 
@@ -570,12 +567,12 @@ export default function NetworkGraph() {
         ? baseColor
         : "#e2e8f0";
     },
-    [groupViewMode, isNodeInSelectedGroup, selectedEvent, selectedGroup]
+    [groupViewMode, isNodeInSelectedGroup, selectedEvent, selectedGroupIdSet]
   );
 
   const getRenderedLinkWidth = useCallback(
     (link: LinkObject) => {
-      if (selectedEvent || groupViewMode !== "highlight" || !selectedGroup) {
+      if (selectedEvent || groupViewMode !== "highlight" || selectedGroupIdSet.size === 0) {
         return 2;
       }
 
@@ -588,7 +585,7 @@ export default function NetworkGraph() {
 
       return isNodeInSelectedGroup(sourceId) && isNodeInSelectedGroup(targetId) ? 2 : 1;
     },
-    [groupViewMode, isNodeInSelectedGroup, selectedEvent, selectedGroup]
+    [groupViewMode, isNodeInSelectedGroup, selectedEvent, selectedGroupIdSet]
   );
 
   const getEventStorageKey = useCallback(
@@ -1616,7 +1613,7 @@ export default function NetworkGraph() {
     setPersonBQuery("");
     setConnectionType("friends");
     setGroupViewMode("all");
-    setSelectedGroupId("");
+    setSelectedGroupIds([]);
     setGroups([]);
     setNodeGroupIdsByNodeId({});
     setGroupTable(null);
@@ -1658,10 +1655,12 @@ export default function NetworkGraph() {
       return;
     }
 
-    const targetGroupId = groupId ?? selectedGroupId;
+    const targetGroupId = groupId ?? (selectedGroupIds.length === 1 ? selectedGroupIds[0] : "");
 
     if (!targetGroupId) {
-      setCreateGroupError("Choose a group to edit.");
+      setCreateGroupError(
+        selectedGroupIds.length > 1 ? "Select exactly one group to edit." : "Choose a group to edit."
+      );
       return;
     }
 
@@ -1794,7 +1793,7 @@ export default function NetworkGraph() {
 
     if (createdGroup && !persistenceFailed) {
       await fetchGraphData(currentUserId);
-      setSelectedGroupId(createdGroup.id);
+      setSelectedGroupIds([createdGroup.id]);
       setShowCreateGroupForm(false);
       setNewGroupName("");
       setNewGroupSelectedNodeIds([]);
@@ -1831,7 +1830,7 @@ export default function NetworkGraph() {
     if (!groupTable || !groupMembershipTable) {
       setGroupError("Create groups and group_memberships tables in Supabase to persist groups across devices.");
     }
-    setSelectedGroupId(localGroup.id);
+    setSelectedGroupIds([localGroup.id]);
     setShowCreateGroupForm(false);
     setNewGroupName("");
     setNewGroupSelectedNodeIds([]);
@@ -1845,12 +1844,14 @@ export default function NetworkGraph() {
       return;
     }
 
-    if (!selectedGroupId) {
+    const editingGroupId = selectedGroupIds.length === 1 ? selectedGroupIds[0] : "";
+
+    if (!editingGroupId) {
       setCreateGroupError("Choose a group to edit.");
       return;
     }
 
-    const existingGroup = groups.find((group) => group.id === selectedGroupId);
+    const existingGroup = groups.find((group) => group.id === editingGroupId);
     if (!existingGroup) {
       setCreateGroupError("Unable to find the selected group.");
       return;
@@ -1865,7 +1866,7 @@ export default function NetworkGraph() {
     if (
       groups.some(
         (group) =>
-          group.id !== selectedGroupId &&
+          group.id !== editingGroupId &&
           normalizeGroupName(group.name) === normalizeGroupName(nextName)
       )
     ) {
@@ -1881,7 +1882,7 @@ export default function NetworkGraph() {
     let persistenceFailed: string | null = null;
 
     if (groupTable && groupMembershipTable) {
-      const updateResult = await supabase.from(groupTable).update({ name: nextName }).eq("id", selectedGroupId);
+      const updateResult = await supabase.from(groupTable).update({ name: nextName }).eq("id", editingGroupId);
 
       if (updateResult.error && hasMissingColumnError(updateResult.error.message, "name")) {
         persistenceFailed = updateResult.error.message;
@@ -1893,13 +1894,13 @@ export default function NetworkGraph() {
         let deleteResult = await supabase
           .from(groupMembershipTable)
           .delete()
-          .eq("group_id", selectedGroupId);
+          .eq("group_id", editingGroupId);
 
         if (deleteResult.error && hasMissingColumnError(deleteResult.error.message, "group_id")) {
           deleteResult = await supabase
             .from(groupMembershipTable)
             .delete()
-            .eq("groupId", selectedGroupId);
+            .eq("groupId", editingGroupId);
         }
 
         if (deleteResult.error) {
@@ -1910,10 +1911,10 @@ export default function NetworkGraph() {
       if (!persistenceFailed) {
         for (const nodeId of newGroupSelectedNodeIds) {
           const membershipPayloads = [
-            { node_id: nodeId, group_id: selectedGroupId, user_id: currentUserId },
-            { node_id: nodeId, group_id: selectedGroupId },
-            { nodeId, groupId: selectedGroupId, user_id: currentUserId },
-            { nodeId, groupId: selectedGroupId },
+            { node_id: nodeId, group_id: editingGroupId, user_id: currentUserId },
+            { node_id: nodeId, group_id: editingGroupId },
+            { nodeId, groupId: editingGroupId, user_id: currentUserId },
+            { nodeId, groupId: editingGroupId },
           ];
 
           let inserted = false;
@@ -1963,7 +1964,7 @@ export default function NetworkGraph() {
     }
 
     const nextGroups = groups.map((group) =>
-      group.id === selectedGroupId
+      group.id === editingGroupId
         ? {
             ...group,
             name: nextName,
@@ -1975,14 +1976,14 @@ export default function NetworkGraph() {
 
     for (const node of graphData.nodes) {
       const existingMemberships = nodeGroupIdsByNodeId[node.id] ?? [];
-      nextNodeGroupIdsByNodeId[node.id] = existingMemberships.filter((groupId) => groupId !== selectedGroupId);
+      nextNodeGroupIdsByNodeId[node.id] = existingMemberships.filter((groupId) => groupId !== editingGroupId);
     }
 
     for (const nodeId of newGroupSelectedNodeIds) {
       const existingMemberships = nextNodeGroupIdsByNodeId[nodeId] ?? [];
-      nextNodeGroupIdsByNodeId[nodeId] = existingMemberships.includes(selectedGroupId)
+      nextNodeGroupIdsByNodeId[nodeId] = existingMemberships.includes(editingGroupId)
         ? existingMemberships
-        : [...existingMemberships, selectedGroupId];
+        : [...existingMemberships, editingGroupId];
     }
 
     setGroups(nextGroups);
@@ -3492,14 +3493,8 @@ export default function NetworkGraph() {
   }, [fetchGraphData, getCurrentUserId]);
 
   useEffect(() => {
-    if (!selectedGroupId) {
-      return;
-    }
-
-    if (!groups.some((group) => group.id === selectedGroupId)) {
-      setSelectedGroupId("");
-    }
-  }, [groups, selectedGroupId]);
+    setSelectedGroupIds((current) => current.filter((groupId) => groups.some((group) => group.id === groupId)));
+  }, [groups]);
 
   useEffect(() => {
     if (!currentUserId) {
@@ -4176,9 +4171,17 @@ export default function NetworkGraph() {
                   <button
                     key={group.id}
                     type="button"
-                    onClick={() => setSelectedGroupId((current) => (current === group.id ? "" : group.id))}
+                    onClick={() =>
+                      setSelectedGroupIds((current) =>
+                        current.includes(group.id)
+                          ? current.filter((groupId) => groupId !== group.id)
+                          : [...current, group.id]
+                      )
+                    }
                     onContextMenu={(event) => {
-                      setSelectedGroupId(group.id);
+                      setSelectedGroupIds((current) =>
+                        current.includes(group.id) ? current : [...current, group.id]
+                      );
                       openContextMenu(
                         {
                           kind: "group",
@@ -4191,7 +4194,9 @@ export default function NetworkGraph() {
                       );
                     }}
                     className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs ${
-                      selectedGroupId === group.id ? "border-slate-700 bg-slate-100" : "border-slate-200 bg-white"
+                      selectedGroupIds.includes(group.id)
+                        ? "border-slate-700 bg-slate-100"
+                        : "border-slate-200 bg-white"
                     }`}
                     title={`${group.name}: ${count}`}
                   >
@@ -4207,7 +4212,7 @@ export default function NetworkGraph() {
               {groupCounts.length === 0 ? (
                 <p className="mt-2 text-xs text-slate-500">No groups yet. Add one to get started.</p>
               ) : (
-                <p className="mt-2 text-xs text-slate-500">Click a group to select it. Click again to clear.</p>
+                <p className="mt-2 text-xs text-slate-500">Click groups to select multiple. Click again to deselect.</p>
               )}
               {groupError ? <p className="mt-1 text-xs text-amber-700">{groupError}</p> : null}
             </section>
