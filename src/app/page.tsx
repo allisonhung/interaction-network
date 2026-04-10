@@ -310,7 +310,9 @@ export default function NetworkGraph() {
   };
 
   const normalizeLinks = (data: Record<string, unknown>[]) => {
-    return data.map((link) => {
+    const linksByPair = new Map<string, GraphLink>();
+
+    data.forEach((link) => {
       const linkType =
         (typeof link.type === "string" && link.type) ||
         (typeof link.relationship_type === "string" && link.relationship_type)
@@ -321,17 +323,28 @@ export default function NetworkGraph() {
         normalizedType in RELATIONSHIP_COLORS
           ? RELATIONSHIP_COLORS[normalizedType]
           : RELATIONSHIP_COLORS.friends;
-      return {
-        id: typeof link.id === "string" ? link.id : undefined,
-        source: String(link.source),
-        target: String(link.target),
+
+      const source = String(link.source);
+      const target = String(link.target);
+      const [firstNodeId, secondNodeId] = [source, target].sort();
+      const pairKey = `${firstNodeId}::${secondNodeId}`;
+
+      linksByPair.set(pairKey, {
+        id:
+          typeof link.id === "string" || typeof link.id === "number"
+            ? String(link.id)
+            : undefined,
+        source: firstNodeId,
+        target: secondNodeId,
         type: linkType,
         color:
           typeof link.color === "string" && link.color
             ? link.color
             : defaultColor,
-      };
+      });
     });
+
+    return Array.from(linksByPair.values());
   };
 
   const normalizeGroups = useCallback((data: GroupRecord[]) => {
@@ -2564,24 +2577,98 @@ export default function NetworkGraph() {
           ? { ...basePayload, relationship_type: type, color }
           : { ...basePayload, type, color };
 
-      const insertResult = await supabase.from(table).insert(typedPayload);
+      const existingResult = await supabase
+        .from(table)
+        .select("*")
+        .eq("source", firstNodeId)
+        .eq("target", secondNodeId)
+        .limit(50);
 
-      insertError = insertResult.error ? { message: insertResult.error.message } : null;
+      if (existingResult.error) {
+        insertError = { message: existingResult.error.message };
 
-      if (
-        insertError &&
-        (hasMissingColumnError(insertError.message, "type") ||
-          hasMissingColumnError(insertError.message, "relationship_type") ||
-          hasMissingColumnError(insertError.message, "color"))
-      ) {
-        const minimalPayload =
+        if (hasMissingTableError(insertError.message, table)) {
+          continue;
+        }
+
+        break;
+      }
+
+      const existingRows = (existingResult.data ?? []) as Array<Record<string, unknown>>;
+
+      if (existingRows.length > 0) {
+        const updatePayloadAttempts =
           table === "edges"
-            ? { ...basePayload, relationship_type: type }
-            : { ...basePayload, type };
+            ? [
+                { relationship_type: type, color },
+                { relationship_type: type },
+                { type, color },
+                { type },
+              ]
+            : [
+                { type, color },
+                { type },
+                { relationship_type: type, color },
+                { relationship_type: type },
+              ];
 
-        const retryResult = await supabase.from(table).insert(minimalPayload);
+        insertError = null;
 
-        insertError = retryResult.error ? { message: retryResult.error.message } : null;
+        for (const payload of updatePayloadAttempts) {
+          const updateResult = await supabase
+            .from(table)
+            .update(payload)
+            .eq("source", firstNodeId)
+            .eq("target", secondNodeId);
+
+          if (updateResult.error) {
+            insertError = { message: updateResult.error.message };
+
+            if (
+              hasMissingColumnError(insertError.message, "type") ||
+              hasMissingColumnError(insertError.message, "relationship_type") ||
+              hasMissingColumnError(insertError.message, "color")
+            ) {
+              continue;
+            }
+
+            break;
+          }
+
+          insertError = null;
+          break;
+        }
+
+        if (!insertError && existingRows.length > 1) {
+          const duplicateIds = existingRows
+            .map((row) => row.id)
+            .filter((id): id is string | number => typeof id === "string" || typeof id === "number")
+            .map((id) => String(id));
+
+          if (duplicateIds.length > 1) {
+            await supabase.from(table).delete().in("id", duplicateIds.slice(1));
+          }
+        }
+      } else {
+        const insertResult = await supabase.from(table).insert(typedPayload);
+
+        insertError = insertResult.error ? { message: insertResult.error.message } : null;
+
+        if (
+          insertError &&
+          (hasMissingColumnError(insertError.message, "type") ||
+            hasMissingColumnError(insertError.message, "relationship_type") ||
+            hasMissingColumnError(insertError.message, "color"))
+        ) {
+          const minimalPayload =
+            table === "edges"
+              ? { ...basePayload, relationship_type: type }
+              : { ...basePayload, type };
+
+          const retryResult = await supabase.from(table).insert(minimalPayload);
+
+          insertError = retryResult.error ? { message: retryResult.error.message } : null;
+        }
       }
 
       if (insertError && hasMissingTableError(insertError.message, table)) {
