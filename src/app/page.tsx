@@ -2082,6 +2082,36 @@ export default function NetworkGraph() {
     setIsSaving(true);
     setError(null);
 
+    const tableCandidates = relationTable
+      ? [relationTable, ...RELATION_TABLE_CANDIDATES.filter((table) => table !== relationTable)]
+      : [...RELATION_TABLE_CANDIDATES];
+
+    let lastConnectionErrorMessage: string | null = null;
+
+    for (const table of tableCandidates) {
+      const deleteConnectionsResult = await supabase
+        .from(table)
+        .delete()
+        .or(`source.eq.${node.id},target.eq.${node.id}`);
+
+      if (deleteConnectionsResult.error) {
+        if (hasMissingTableError(deleteConnectionsResult.error.message, table)) {
+          continue;
+        }
+
+        lastConnectionErrorMessage = deleteConnectionsResult.error.message;
+        continue;
+      }
+
+      setRelationTable(table);
+    }
+
+    if (lastConnectionErrorMessage) {
+      setError(lastConnectionErrorMessage);
+      setIsSaving(false);
+      return;
+    }
+
     const deleteResult = await supabase.from("nodes").delete().eq("id", node.id);
 
     if (deleteResult.error) {
